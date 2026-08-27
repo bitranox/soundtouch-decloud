@@ -1,7 +1,7 @@
 {
   "name": "soundtouch-decloud",
   "description": "Bring Bose SoundTouch speakers back after the SoundTouch cloud shutdown: point them at a self-hosted replacement service, recover each station's direct stream URL, and prove every preset plays before it reaches a button.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "bitranox"
   },

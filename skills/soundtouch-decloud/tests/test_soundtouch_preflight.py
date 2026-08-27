@@ -123,7 +123,7 @@ def test_the_running_python_is_the_one_reported():
 def test_nothing_installed_names_every_required_tool():
     results = P.run_checks("debian", which=_which(), version=_version)
     missing = [r["tool"] for r in results if r["required"] and not r["present"]]
-    assert missing == ["uv", "docker", "docker-compose"]
+    assert missing == ["uv", "docker", "docker compose"]
 
 
 def test_pytest_absent_does_not_make_the_run_fail():
@@ -176,7 +176,7 @@ def test_every_version_reported_comes_from_the_injected_seam():
     """
     results = P.run_checks("debian", which=_which("uv", "docker", "pytest"),
                            version=lambda _argv: "INJECTED")
-    assert [r["tool"] for r in results] == ["python", "uv", "docker", "docker-compose", "pytest"]
+    assert [r["tool"] for r in results] == ["python", "uv", "docker", "docker compose", "pytest"]
     for result in results:
         if result["tool"] == "python":
             continue                      # read from the interpreter, not from a subprocess

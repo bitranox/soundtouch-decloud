@@ -144,7 +144,9 @@ def check_compose(system: str, *, which=shutil.which, version=None) -> dict[str,
     """
     version = version or _version_of
     detail = version(["docker", "compose", "version"]) if which("docker") else ""
-    return {"tool": "docker-compose", "required": True, "present": bool(detail),
+    # Named for the COMMAND, not the package. `docker-compose` is also the deprecated standalone
+    # v1 binary, so a reader who searches that label lands on the wrong tool and can install it.
+    return {"tool": "docker compose", "required": True, "present": bool(detail),
             "detail": detail or "not available",
             "why": "the service is started with `docker compose up`",
             "install": _COMPOSE_HINTS.get(system, _COMPOSE_DEFAULT)}

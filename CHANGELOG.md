@@ -9,6 +9,15 @@ numbers are independent: this file tracks this repo.
 
 ## [Unreleased]
 
+## [1.2.1] 2026-08-27
+
+### Fixed
+
+- **The compose row is named after the command, not the package.** It read `docker-compose`, which
+  is also the deprecated standalone v1 binary. The install line beside it was correct, but the
+  label is the string a reader searches, and that search reaches v1. It reads `docker compose` now,
+  which is what the skill runs and what the owner types.
+
 ## [1.2.0] 2026-08-27
 
 ### Fixed

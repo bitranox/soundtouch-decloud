@@ -139,10 +139,16 @@ def check_pytest(*, which=shutil.which, version=None) -> dict[str, object]:
             "install": "`uv run --with pytest pytest`, which needs no separate install"}
 
 
-def run_checks(system: str, *, which=shutil.which) -> list[dict[str, object]]:
-    """Every check, in the order the owner needs them."""
-    results = [check_python(), check_uv(system, which=which), check_docker(system, which=which),
-               check_pytest(which=which)]
+def run_checks(system: str, *, which=shutil.which, version=None) -> list[dict[str, object]]:
+    """Every check, in the order the owner needs them.
+
+    BOTH seams are forwarded. Injecting only the PATH lookup leaves the version calls hitting the
+    real machine, so a test that says "pretend docker is installed" still asks the actual docker
+    for its version - which passes wherever docker happens to exist and fails everywhere else.
+    """
+    results = [check_python(), check_uv(system, which=which, version=version),
+               check_docker(system, which=which, version=version),
+               check_pytest(which=which, version=version)]
     for result in results:
         if result["tool"] == "python" and not result["present"]:
             # uv can install a Python itself, so the floor is a smaller problem than it looks.

@@ -94,24 +94,24 @@ def test_the_running_python_is_the_one_reported():
 # --- the whole run --------------------------------------------------------------------------
 
 def test_nothing_installed_names_every_required_tool():
-    results = P.run_checks("debian", which=_which())
+    results = P.run_checks("debian", which=_which(), version=_version)
     missing = [r["tool"] for r in results if r["required"] and not r["present"]]
     assert missing == ["uv", "docker"]
 
 
 def test_pytest_absent_does_not_make_the_run_fail():
-    results = P.run_checks("debian", which=_which("uv", "docker"))
+    results = P.run_checks("debian", which=_which("uv", "docker"), version=_version)
     assert [r["tool"] for r in results if r["required"] and not r["present"]] == []
 
 
 def test_every_check_carries_a_reason_the_owner_can_read():
-    for result in P.run_checks("debian", which=_which()):
+    for result in P.run_checks("debian", which=_which(), version=_version):
         assert result["why"]
 
 
 def test_every_missing_required_tool_carries_an_install_instruction():
     """A report that says something is missing and not how to fix it is half a check."""
-    for result in P.run_checks("debian", which=_which()):
+    for result in P.run_checks("debian", which=_which(), version=_version):
         if not result["present"]:
             assert result.get("install"), result["tool"]
 
@@ -136,3 +136,22 @@ def test_an_unknown_system_still_answers_rather_than_failing(capsys):
 def test_the_parser_accepts_the_documented_usage():
     assert P.build_parser().parse_args(["--system", "ubuntu"]).system == "ubuntu"
     assert P.build_parser().parse_args([]).system == ""
+
+
+def test_every_version_reported_comes_from_the_injected_seam():
+    """The control for the seam itself.
+
+    Forwarding only the PATH lookup left the version calls hitting the real machine, so a test
+    pretending docker was installed still asked the actual docker for its version: it passed
+    wherever docker happened to exist and failed on a runner without it. Asserting the reported
+    detail is the injected sentinel catches that directly - a half-forwarded seam reports the real
+    machine's version string here, or an empty one, and neither is the sentinel.
+    """
+    results = P.run_checks("debian", which=_which("uv", "docker", "pytest"),
+                           version=lambda _argv: "INJECTED")
+    assert [r["tool"] for r in results] == ["python", "uv", "docker", "pytest"]
+    for result in results:
+        if result["tool"] == "python":
+            continue                      # read from the interpreter, not from a subprocess
+        assert "INJECTED" in str(result["detail"]), result
+        assert result["present"] is True, result

@@ -8,12 +8,30 @@ run themselves, and getting radio and presets back.
 It assumes the person at the other end is not technical. The skill asks rather than instructs,
 reads freely, and requires a yes before anything changes on a speaker.
 
+## Credit
+
+The replacement service this skill points speakers at is **AfterTouch**, by
+[gesellix](https://github.com/gesellix): <https://github.com/gesellix/Bose-SoundTouch>. None of this
+works without it. The service, its migration guides and its troubleshooting docs are the ground
+truth, and where this skill and that project disagree, that project is right. If you get value out
+of the skill, the thanks belong there.
+
+This repo is a skill, not a fork: it carries no part of AfterTouch and installs the published
+container image.
+
 ## What you need
 
 - One or more Bose SoundTouch speakers on the local network.
 - A machine on the same network that can run Docker: a NAS, a Raspberry Pi, a small Linux box.
   It hosts the replacement service and needs an address that does not move.
-- Python 3.11 or newer, for the scripts.
+- Python 3.11 or newer, and `uv`, for the scripts.
+
+You do not have to work out whether you have those. Run the preflight check, which needs nothing
+but Python and tells you what is missing and how to install it on your system:
+
+```bash
+python3 skills/soundtouch-decloud/scripts/soundtouch_preflight.py
+```
 
 ## Install the skill in Claude Code
 
@@ -58,12 +76,13 @@ The skill carries five reference files and four scripts. Every script prints a J
 uses the same exit codes: 0 yes, 1 no, 2 could not tell. Anything that CHANGES a speaker needs an
 explicit `--confirm`, so the read half is always safe to run.
 
-| Script                  | What it does                                                                              |
-|-------------------------|-------------------------------------------------------------------------------------------|
-| `soundtouch_service.py` | Check Docker, write and validate the compose file, check the service is answering          |
-| `soundtouch_find.py`    | Discover speakers on the network and report the state each one is in                       |
-| `soundtouch_onboard.py` | Open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
-| `soundtouch_presets.py` | Back up, harvest, validate, check and restore presets                                      |
+| Script                    | What it does                                                                               |
+|---------------------------|--------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed and how to install the rest (run with `python3`)  |
+| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check the service is answering          |
+| `soundtouch_find.py`      | Discover speakers on the network and report the state each one is in                       |
+| `soundtouch_onboard.py`   | Open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
+| `soundtouch_presets.py`   | Back up, harvest, validate, check and restore presets                                      |
 
 Beyond the mechanics, the skill knows the things that are easy to get wrong and hard to diagnose:
 

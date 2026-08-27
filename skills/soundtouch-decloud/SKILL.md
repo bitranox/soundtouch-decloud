@@ -41,6 +41,7 @@ Ask one question at a time. Prefer multiple choice. Check in after each phase.
 
 | Phase | Do this                                                                            | Detail in             |
 |-------|------------------------------------------------------------------------------------|-----------------------|
+| 0     | Check the prerequisites and install whatever is missing                            | this file, below      |
 | 1     | Ask which speakers and models. Warn about stereo pairs before anything else        | this file, below      |
 | 2     | Decide where the service runs and PIN that address                                 | service-setup.md      |
 | 3     | Check Docker is installed; if not, walk them through installing it                 | service-setup.md      |
@@ -53,6 +54,28 @@ Ask one question at a time. Prefer multiple choice. Check in after each phase.
 | 10    | Harvest the old presets, ask which stations they still want, validate every stream | presets.md            |
 | 11    | Write the presets. Measure before adding anything that rewrites them               | presets.md            |
 | 12    | Acceptance: hear two different stations, reboot, check they came back              | presets.md            |
+
+**Phase 0: find out what is already installed, before asking the owner to do anything.**
+
+```bash
+python3 scripts/soundtouch_preflight.py
+```
+
+Note `python3`, not `uv run`. Every other command here starts with `uv`, and `uv` is one of the
+things this checks for, so a checker written the usual way could not run on the machine that needs
+it most.
+
+It reports Python, `uv` and Docker, each with a per-platform install instruction when it is
+missing, and exits 1 if anything required is absent. `pytest` is reported and never required: it is
+for people changing the skill, not using it.
+
+Do not read the result out as a list of failures. Take the missing ones ONE at a time, give the
+owner the exact line for their system, and wait for them to say it worked before moving on. A
+person handed three terminal commands at once runs none of them. A fresh install usually needs a
+new terminal before it is on PATH, which is the commonest reason a second check still says missing.
+
+If the owner has no way to install Docker, say so now rather than at phase 3. The service can run
+other ways, and that changes the plan rather than ending it.
 
 **Phase 1, before anything else: ask what you are working with.** Ask whether any two speakers are
 a left/right STEREO PAIR, and whether any unit is a Lifestyle or CineMate console rather than a
@@ -77,15 +100,20 @@ Use the Read tool to load the file for the phase you are in. Do not answer from 
 
 ## Scripts
 
-Run with `uv run scripts/<name>.py`. Each prints a JSON envelope; exit 0 yes, 1 no, 2 error.
-Anything that CHANGES a speaker requires `--confirm`, so the read half is always safe to run.
+Run with `uv run scripts/<name>.py`, with ONE exception: `soundtouch_preflight.py` is run as
+`python3 scripts/soundtouch_preflight.py`, because `uv` is one of the things it checks for and a
+checker that needs the missing tool is no checker at all.
 
-| Script                  | Use it to                                                                                        |
-|-------------------------|--------------------------------------------------------------------------------------------------|
-| `soundtouch_service.py` | Check Docker, write and validate the compose file, check service health                          |
-| `soundtouch_find.py`    | Discover speakers and report what state each is in                                               |
-| `soundtouch_onboard.py` | Open SSH, migrate the URLs, reboot, prove a preset really played                                 |
-| `soundtouch_presets.py` | Back up, harvest a template from an old backup, validate every stream, restore and check presets |
+Each prints a JSON envelope; exit 0 yes, 1 no, 2 error. Anything that CHANGES a speaker requires
+`--confirm`, so the read half is always safe to run.
+
+| Script                    | Use it to                                                                                        |
+|---------------------------|--------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`     |
+| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                          |
+| `soundtouch_find.py`      | Discover speakers and report what state each is in                                               |
+| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                 |
+| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets |
 
 ## When it does not work
 

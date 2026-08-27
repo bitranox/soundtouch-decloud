@@ -1,0 +1,11 @@
+{
+  "name": "soundtouch-decloud",
+  "description": "Bring Bose SoundTouch speakers back after the SoundTouch cloud shutdown: point them at a self-hosted replacement service, recover each station's direct stream URL, and prove every preset plays before it reaches a button.",
+  "version": "1.0.0",
+  "author": {
+    "name": "bitranox"
+  },
+  "homepage": "https://github.com/bitranox/soundtouch-decloud",
+  "repository": "https://github.com/bitranox/soundtouch-decloud",
+  "license": "MIT"
+}

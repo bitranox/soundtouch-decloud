@@ -1,0 +1,12 @@
+# Normalize every text file to LF in the repo AND the working tree, on every OS.
+# `text=auto` auto-detects binary and leaves it untouched; `eol=lf` forces LF checkout
+# so a Windows edit/save cannot reintroduce CRLF churn.
+* text=auto eol=lf
+
+# Runtime-critical: the scripts here are run directly, and a CRLF in a shebang line makes
+# the interpreter lookup fail with a message that names neither the file nor the reason.
+*.py         text eol=lf
+*.sh         text eol=lf
+*.md         text eol=lf
+*.json       text eol=lf
+*.yml        text eol=lf

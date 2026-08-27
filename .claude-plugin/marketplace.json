@@ -1,0 +1,16 @@
+{
+  "name": "soundtouch-decloud",
+  "owner": {
+    "name": "bitranox"
+  },
+  "metadata": {
+    "description": "The soundtouch-decloud skill delivered as a single Claude Code plugin: de-cloud Bose SoundTouch speakers end to end."
+  },
+  "plugins": [
+    {
+      "name": "soundtouch-decloud",
+      "source": ".",
+      "description": "Bring Bose SoundTouch speakers back after the SoundTouch cloud shutdown: point them at a self-hosted replacement service, recover each station's direct stream URL, and prove every preset plays before it reaches a button."
+    }
+  ]
+}

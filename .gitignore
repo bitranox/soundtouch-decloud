@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+CLAUDE.local.md
+.remember/
+EXECUTION-USER-REVIEW.md

@@ -65,9 +65,11 @@ Note `python3`, not `uv run`. Every other command here starts with `uv`, and `uv
 things this checks for, so a checker written the usual way could not run on the machine that needs
 it most.
 
-It reports Python, `uv` and Docker, each with a per-platform install instruction when it is
-missing, and exits 1 if anything required is absent. `pytest` is reported and never required: it is
-for people changing the skill, not using it.
+It reports Python, `uv`, Docker and the compose plugin on separate lines, each with a per-platform
+install instruction when it is missing, and exits 1 if anything required is absent. Docker and
+compose are separate because having the engine without the plugin is common, and the fix is a
+different package. `pytest` is reported and never required: it is for people changing the skill,
+not using it.
 
 Do not read the result out as a list of failures. Take the missing ones ONE at a time, give the
 owner the exact line for their system, and wait for them to say it worked before moving on. A

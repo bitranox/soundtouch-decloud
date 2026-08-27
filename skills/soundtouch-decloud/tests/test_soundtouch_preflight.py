@@ -64,15 +64,42 @@ def test_the_uv_instruction_is_the_windows_one_on_windows():
     assert "install.sh" not in str(result["install"])
 
 
-def test_docker_on_path_without_compose_is_not_present():
-    """`docker` alone is a real state, and it fails later at `docker compose up`, not here."""
-    result = P.check_docker("debian", which=_which("docker"), version=lambda argv: "")
-    assert result["present"] is False
-
-
-def test_docker_with_compose_is_present():
+def test_docker_is_present_whenever_the_engine_is_installed():
     result = P.check_docker("debian", which=_which("docker"), version=_version)
     assert result["present"] is True
+
+
+def test_docker_missing_is_reported_without_running_anything():
+    result = P.check_docker("debian", which=_which(), version=_version)
+    assert (result["present"], result["detail"]) == (False, "not on PATH")
+
+
+def test_compose_absent_is_its_own_finding_and_docker_stays_present():
+    """The case this split exists for.
+
+    Folding the two together got the verdict right and the advice wrong: somebody who had just
+    installed Docker was told to install Docker. Docker must read present, compose must read
+    absent, and the instruction must be about the PLUGIN.
+    """
+    which, version = _which("docker"), lambda argv: "" if "compose" in argv else "1.2.3"
+    docker = P.check_docker("debian", which=which, version=version)
+    compose = P.check_compose("debian", which=which, version=version)
+    assert docker["present"] is True
+    assert compose["present"] is False
+    assert "docker-compose-plugin" in str(compose["install"])
+    assert "get.docker.com" not in str(compose["install"])
+
+
+def test_compose_is_not_probed_when_docker_is_absent():
+    """With no engine there is nothing to ask, and the hint says so for the platform."""
+    compose = P.check_compose("windows", which=_which(), version=_version)
+    assert (compose["present"], compose["detail"]) == (False, "not available")
+    assert "Docker Desktop" in str(compose["install"])
+
+
+def test_compose_present_reports_its_version():
+    result = P.check_compose("debian", which=_which("docker"), version=_version)
+    assert (result["present"], result["detail"]) == (True, "1.2.3")
 
 
 def test_the_docker_instruction_follows_the_platform():
@@ -96,7 +123,7 @@ def test_the_running_python_is_the_one_reported():
 def test_nothing_installed_names_every_required_tool():
     results = P.run_checks("debian", which=_which(), version=_version)
     missing = [r["tool"] for r in results if r["required"] and not r["present"]]
-    assert missing == ["uv", "docker"]
+    assert missing == ["uv", "docker", "docker-compose"]
 
 
 def test_pytest_absent_does_not_make_the_run_fail():
@@ -149,7 +176,7 @@ def test_every_version_reported_comes_from_the_injected_seam():
     """
     results = P.run_checks("debian", which=_which("uv", "docker", "pytest"),
                            version=lambda _argv: "INJECTED")
-    assert [r["tool"] for r in results] == ["python", "uv", "docker", "pytest"]
+    assert [r["tool"] for r in results] == ["python", "uv", "docker", "docker-compose", "pytest"]
     for result in results:
         if result["tool"] == "python":
             continue                      # read from the interpreter, not from a subprocess

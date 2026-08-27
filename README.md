@@ -161,6 +161,10 @@ python -m pytest -q
 they describe, the skill's frontmatter is the shape the router needs, every shipped script is
 named by a test, and nothing arrived with CRLF. CI runs both on Linux, Windows and macOS.
 
+## Changelog
+
+Every release is described in [CHANGELOG.md](CHANGELOG.md).
+
 ## Layout
 
 ```

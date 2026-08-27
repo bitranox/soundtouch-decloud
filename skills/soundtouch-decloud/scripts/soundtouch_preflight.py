@@ -37,6 +37,17 @@ _UV_POSIX = ("curl -LsSf https://astral.sh/uv/install.sh | sh    "
 _UV_WINDOWS = ('powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
                "    (or `winget install astral-sh.uv`), then open a new terminal")
 
+_COMPOSE_DESKTOP = ("Docker Desktop ships compose. If `docker compose version` fails, update "
+                    "Docker Desktop and make sure it is running")
+_COMPOSE_DEFAULT = "Install your platform's `docker-compose-plugin` package"
+_COMPOSE_HINTS = {
+    "windows": _COMPOSE_DESKTOP,
+    "macos": _COMPOSE_DESKTOP,
+    "debian": "`sudo apt install docker-compose-plugin`",
+    "fedora": "`sudo dnf install docker-compose-plugin`",
+    "nas": "Reinstall or update the Container Manager / Container Station package, which includes it",
+}
+
 _PY_HINTS = {
     "windows": "Install Python from python.org and tick 'Add python.exe to PATH' in the installer",
     "macos": "`brew install python`, or download the installer from python.org",
@@ -45,8 +56,8 @@ _PY_HINTS = {
     "nas": "Install the Python package from the vendor's package centre",
 }
 
-__all__ = ["detect_system", "check_python", "check_uv", "check_docker", "check_pytest",
-           "run_checks", "build_parser", "main"]
+__all__ = ["detect_system", "check_python", "check_uv", "check_docker", "check_compose",
+           "check_pytest", "run_checks", "build_parser", "main"]
 
 
 def detect_system(system: str = "", *, release: str = "/etc/os-release") -> str:
@@ -114,19 +125,29 @@ def check_uv(system: str, *, which=shutil.which, version=None) -> dict[str, obje
 
 
 def check_docker(system: str, *, which=shutil.which, version=None) -> dict[str, object]:
-    """Docker plus the compose plugin, which the replacement service runs under.
-
-    Compose is checked separately: `docker` on PATH without the compose plugin is a real state, and
-    it fails later at `docker compose up` rather than here.
-    """
+    """The Docker engine itself, and nothing else."""
     version = version or _version_of
     found = which("docker")
-    compose = version(["docker", "compose", "version"]) if found else ""
-    return {"tool": "docker", "required": True, "present": bool(found and compose),
-            "detail": f"{version(['docker', '--version'])}; {compose}".strip("; ")
-                      if found else "not on PATH",
+    return {"tool": "docker", "required": True, "present": bool(found),
+            "detail": version(["docker", "--version"]) if found else "not on PATH",
             "why": "the replacement service runs as a container",
             "install": install_hint(system)}
+
+
+def check_compose(system: str, *, which=shutil.which, version=None) -> dict[str, object]:
+    """The compose plugin, reported on its own line rather than folded into Docker.
+
+    `docker` on PATH without `docker compose` is a real and common state, and it fails later at
+    `docker compose up`. Folding the two together got the VERDICT right and the ADVICE wrong: it
+    told somebody who had just installed Docker to install Docker. The plugin is its own package on
+    most Linux distributions, so it gets its own instruction.
+    """
+    version = version or _version_of
+    detail = version(["docker", "compose", "version"]) if which("docker") else ""
+    return {"tool": "docker-compose", "required": True, "present": bool(detail),
+            "detail": detail or "not available",
+            "why": "the service is started with `docker compose up`",
+            "install": _COMPOSE_HINTS.get(system, _COMPOSE_DEFAULT)}
 
 
 def check_pytest(*, which=shutil.which, version=None) -> dict[str, object]:
@@ -148,6 +169,7 @@ def run_checks(system: str, *, which=shutil.which, version=None) -> list[dict[st
     """
     results = [check_python(), check_uv(system, which=which, version=version),
                check_docker(system, which=which, version=version),
+               check_compose(system, which=which, version=version),
                check_pytest(which=which, version=version)]
     for result in results:
         if result["tool"] == "python" and not result["present"]:

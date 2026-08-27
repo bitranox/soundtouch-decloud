@@ -174,8 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--confirm", action="store_true",
                            help="required: without it nothing is written")
     h = sub.add_parser("harvest", help="turn a saved presets XML into a template, holes and all")
-    h.add_argument("--backup", required=True, help="a presets XML from `backup`, or the service's "
-                                                  "<MAC>-presets-before-migration.xml")
+    h.add_argument("--backup", required=True, help="a presets XML from `backup`, or a synced Presets.xml "
+                                                  "from the service data dir")
     h.add_argument("--out", help="write the template here instead of stdout")
     h.add_argument("--name", default="", help="speaker name to record in the template")
     h.add_argument("--device-id", default="", help="device id to record in the template")

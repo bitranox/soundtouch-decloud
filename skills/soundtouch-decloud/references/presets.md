@@ -34,13 +34,16 @@ usually comes from. Never write a stream into a preset without fetching it first
 uv run scripts/soundtouch_presets.py harvest --backup <presets.xml> --out <speaker>.json
 ```
 
-Two sources for that XML, and the second costs nothing:
+Two sources for that XML, and only the first is yours to rely on:
 
-- whatever `backup` saved before the migration
-- `<data-dir>/preset-backups/<MAC>-presets-before-migration.xml`, which the service writes by itself
-  when a speaker migrates. `<data-dir>` is the host path mounted as the service's data volume, so it
-  is whatever the compose file says (`service-setup.md`); `<MAC>` is the speaker's device id, which
-  `soundtouch_find.py` reports and `/info` carries.
+- whatever `backup` saved before the migration. This is the one that matters: nothing else
+  captures presets on the migration path this skill uses.
+- `<data-dir>/accounts/<account>/devices/<serial>/Presets.xml`, IF a "Sync" was run for that
+  speaker while its presets were still intact. A Sync writes that file; a migration does not.
+  `<data-dir>` is the host path mounted as the service's data volume, so it is whatever the
+  compose file says (`service-setup.md`). Do not count on it: with `method=telnet` - what
+  `migration.md` tells you to use - the service takes the SSH-free path and skips its
+  off-device backup step entirely.
 
 A preset stored while the Bose cloud was alive points at the Orion station adapter and carries the
 real stream inside its `data` parameter, base64url JSON with a `streamUrl` key. So the owner's own

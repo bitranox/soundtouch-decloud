@@ -41,12 +41,12 @@ docker --version && docker compose version
 
 If that fails, ask which system the machine runs and walk them through it:
 
-| System                | What to tell them                                                        |
-|-----------------------|---------------------------------------------------------------------------|
-| Windows or macOS      | Install Docker Desktop from docker.com, then start it and re-run the check |
+| System                          | What to tell them                                                                                       |
+|---------------------------------|---------------------------------------------------------------------------------------------------------|
+| Windows or macOS                | Install Docker Desktop from docker.com, then start it and re-run the check                              |
 | Ubuntu, Debian, Raspberry Pi OS | `curl -fsSL https://get.docker.com \| sh`, then `sudo usermod -aG docker $USER` and log out and back in |
-| Fedora, RHEL          | `sudo dnf install docker docker-compose-plugin` then `sudo systemctl enable --now docker` |
-| Synology, QNAP        | Install the Container Manager or Container Station package from the vendor's package centre |
+| Fedora, RHEL                    | `sudo dnf install docker docker-compose-plugin` then `sudo systemctl enable --now docker`               |
+| Synology, QNAP                  | Install the Container Manager or Container Station package from the vendor's package centre             |
 
 Re-run the check afterwards and confirm both commands answer before continuing. On Linux, if
 `docker` needs `sudo` after installing, the group change has not taken effect yet: they must log out
@@ -75,6 +75,8 @@ services:
       DATA_DIR: /app/data
       SERVER_URL: http://192.0.2.10:8000
       HTTPS_SERVER_URL: https://192.0.2.10:8443
+      MGMT_USERNAME: admin
+      MGMT_PASSWORD: change_me!
       RECORD_INTERACTIONS: "true"
       DISCOVERY_INTERVAL: 5m
     volumes:
@@ -90,9 +92,9 @@ service's own settings: a speaker only learns one at migrate time.
 this setup disappoints.** Automatic discovery is SSDP and mDNS, which are multicast, and Docker's
 bridge does not forward multicast into a container.
 
-| Host                          | Mode                       | What it means                                       |
-|-------------------------------|----------------------------|-----------------------------------------------------|
-| Linux (Pi, NAS, server, LXC)  | `--network host` (default) | The service finds the speakers by itself            |
+| Host                          | Mode                       | What it means                                                                                    |
+|-------------------------------|----------------------------|--------------------------------------------------------------------------------------------------|
+| Linux (Pi, NAS, server, LXC)  | `--network host` (default) | The service finds the speakers by itself                                                         |
 | Docker Desktop, Windows/macOS | `--network ports`          | Host networking does not behave the same way there; publish the ports and add each speaker by IP |
 
 On a bridge the service still works. It answers, it serves the account, it migrates and it plays.

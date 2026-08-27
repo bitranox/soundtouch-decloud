@@ -9,6 +9,18 @@ numbers are independent: this file tracks this repo.
 
 ## [Unreleased]
 
+## [1.2.2] 2026-08-27
+
+### Fixed
+
+- **The README no longer hands the reader a command they cannot run.** It told them to run the
+  prerequisite check at `skills/soundtouch-decloud/scripts/...`, which only resolves in a clone of
+  this repo. Somebody who installed the plugin has it in the Claude Code plugin cache, so the path
+  was wrong for the normal install, and asking a reader to type a path at all is the wrong shape
+  for a skill they installed so they would not have to. Running the check is the skill's first
+  step, and the README now says that. The direct command stays, for anyone who cloned the repo and
+  wants to see the answer before installing anything.
+
 ## [1.2.1] 2026-08-27
 
 ### Fixed

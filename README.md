@@ -24,14 +24,12 @@ container image.
 - One or more Bose SoundTouch speakers on the local network.
 - A machine on the same network that can run Docker: a NAS, a Raspberry Pi, a small Linux box.
   It hosts the replacement service and needs an address that does not move.
-- Python 3.11 or newer, and `uv`, for the scripts.
+- Python 3.11 or newer, `uv`, and Docker with the compose plugin, on that machine.
 
-You do not have to work out whether you have those. Run the preflight check, which needs nothing
-but Python and tells you what is missing and how to install it on your system:
-
-```bash
-python3 skills/soundtouch-decloud/scripts/soundtouch_preflight.py
-```
+You do not have to work any of that out. Checking it is the skill's first step: it runs the check
+itself, tells you in plain words what is missing, and gives you the install line for your own
+system, one thing at a time. If something cannot be installed, it says so then rather than halfway
+through.
 
 ## Install the skill in Claude Code
 
@@ -61,10 +59,17 @@ self-hosted Bose service" matches. You can also ask for it by name:
 Use the soundtouch-decloud skill to get my SoundTouch speakers working again.
 ```
 
-From there it works in phases, checking in after each one: find the speakers, stand up the
-service, back up every speaker BEFORE anything changes, rewrite the four service URLs, wait for
-the radio sources, recover and verify the stations, write the presets, then prove it by listening
-rather than by counting.
+From there it works in phases, checking in after each one: check the prerequisites and help you
+install whatever is missing, find the speakers, stand up the service, back up every speaker BEFORE
+anything changes, rewrite the four service URLs, wait for the radio sources, recover and verify the
+stations, write the presets, then prove it by listening rather than by counting.
+
+If you would rather see the prerequisite check before installing anything, clone this repo and run
+it directly. It needs nothing but Python, because `uv` is one of the things it looks for:
+
+```bash
+python3 skills/soundtouch-decloud/scripts/soundtouch_preflight.py
+```
 
 Order matters more than it looks. The backup comes first because a migration has emptied an
 account's presets, and the four URLs have a write order that decides whether any of them survive

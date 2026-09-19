@@ -7,9 +7,7 @@ description: Use when Bose SoundTouch speakers lost internet radio and presets a
 
 > This repo is itself a Claude Code plugin/marketplace. Install this skill in any
 > project with `/plugin marketplace add bitranox/soundtouch-decloud` then
-> `/plugin install soundtouch-decloud`. It is also mirrored in the central bitranox
-> marketplace (<https://github.com/bitranox/bitranox-skills>) as
-> `infra-soundtouch-decloud`.
+> `/plugin install soundtouch-decloud`.
 
 Bose shut the SoundTouch cloud down. The speakers keep Bluetooth, AUX and AirPlay, and multiroom
 zones still work; internet radio, presets, browsing and Alexa voice commands are dead. Radio and

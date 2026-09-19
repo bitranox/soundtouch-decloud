@@ -3,11 +3,56 @@
 All notable changes to this project will be documented in this file following
 the [Keep a Changelog](https://keepachangelog.com/) format.
 
-The skill is also published in the central bitranox marketplace as
-`infra-soundtouch-decloud`, and the two copies are kept in sync. Their version
-numbers are independent: this file tracks this repo.
+This repo is the skill's only home, so this file is the only version history it has.
 
 ## [Unreleased]
+
+## [1.3.0] 2026-09-20
+
+### Added
+
+- **The troubleshooting reference can now name the fault where a speaker answers everything and
+  plays nothing.** A speaker can pass every check the skill teaches - all four URLs local, account
+  bound, presets in the adapter format, `LOCAL_INTERNET_RADIO` READY, wired and reaching the
+  internet - and still be silent, because its own state machine is stuck in setup. `/now_playing`
+  is the only endpoint that shows it, as `source="SETUP"` before anyone touches the unit and as
+  `EVENT_IN_WRONG_STATE ... Inactive` after a button has been pressed. The distinguishing tell is
+  that the speaker issues no request at all, so the service's interaction record stays empty and
+  inspecting the service correctly finds nothing wrong.
+
+  The fix is a POWER key press over HTTP, which clears it in about a second. The section says
+  plainly not to reach for a reboot or a power cycle first, because both work and both cost the
+  55-to-92-second readiness window for nothing.
+
+  Measured rather than asserted. Given the previous text, a test agent ruled out every documented
+  cause correctly and then recommended pulling the power for ten seconds and waiting two minutes,
+  at its own stated medium confidence, noting that "the reference has no row for this" and that
+  "the reference is silent on both states". Given the new text it named the fault directly, gave
+  the key press, said not to power-cycle first, and quoted the lines it rested on.
+
+  Two limits are stated in the text rather than papered over: only the HTTP path was measured, so
+  whether the physical button clears the same state is untested, and what puts a speaker into the
+  state in the first place is not established.
+
+### Changed
+
+- **The skill is no longer mirrored in the central bitranox marketplace.** It was removed there in
+  that repo's 7.0.0. This repo is the only place it ships, which is what the install instructions
+  in the README and the skill now say. Nothing about the skill's content changed with the move.
+
+## [1.2.3] 2026-08-27
+
+### Fixed
+
+- **A preset backup the service never writes was offered as a file to go and read.**
+  `references/presets.md` named `<data-dir>/preset-backups/<MAC>-presets-before-migration.xml` as
+  something written automatically on migration. It is not, in any spelling, anywhere upstream. What
+  is written automatically is `SoundTouchSdkPrivateCfg.xml.bak` and `hosts.bak`, and on the telnet
+  path this skill mandates, the run returns before even that step. The real preset file is
+  `accounts/<account>/devices/<serial>/Presets.xml`, written on Sync rather than on migration. The
+  CLI help string carried the same wrong name and is corrected with it.
+- **The render sample omitted `MGMT_USERNAME` and `MGMT_PASSWORD`,** which the generator always
+  emits, while the paragraph below it tells the reader to change `MGMT_PASSWORD`.
 
 ## [1.2.2] 2026-08-27
 

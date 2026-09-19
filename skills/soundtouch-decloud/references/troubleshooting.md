@@ -5,19 +5,65 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 
 ## Symptom to cause
 
-| Symptom                                                     | Cause                                                        |
-|-------------------------------------------------------------|--------------------------------------------------------------|
-| Service starts, finds no speakers at all                     | Bridge networking. Discovery is multicast; use host networking |
-| One speaker missing, others found                            | Asleep, on a guest network, or on a different subnet          |
-| `/sources` lists no radio source                             | `bmxRegistryUrl` still points at the dead cloud               |
-| All four URLs local, still no radio source                   | No account bound; check `margeAccountUUID`                    |
-| Presets accepted, gone after every reboot                    | The boot wipe. Try a per-speaker account id before automating around it |
-| Preset selected, nothing plays, gives up after ~20 s          | The location is a raw stream URL, not the playback adapter    |
-| Buffering, then gives up after ~20 s                          | Format is right. Either the audio never arrived, or upstream issue #604 |
-| Everything worked, then all speakers broke at once            | The service's address changed                                 |
-| Values written, all replied OK, gone after reboot             | `envswitch` was written before the `sys configuration` writes |
-| SSH worked, gone after a reboot                               | The flash marker was never written                            |
-| Speaker plays but ignores presets, source reads LOCAL         | A Lifestyle console sitting on its own input, not SoundTouch  |
+| Symptom                                                            | Cause                                                                            |
+|--------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| Service starts, finds no speakers at all                           | Bridge networking. Discovery is multicast; use host networking                   |
+| One speaker missing, others found                                  | Asleep, on a guest network, or on a different subnet                             |
+| `/sources` lists no radio source                                   | `bmxRegistryUrl` still points at the dead cloud                                  |
+| All four URLs local, still no radio source                         | No account bound; check `margeAccountUUID`                                       |
+| Presets accepted, gone after every reboot                          | The boot wipe. Try a per-speaker account id before automating around it          |
+| Preset selected, nothing plays, gives up after ~20 s               | The location is a raw stream URL, not the playback adapter                       |
+| Buffering, then gives up after ~20 s                               | Format is right. Either the audio never arrived, or upstream issue #604          |
+| Everything worked, then all speakers broke at once                 | The service's address changed                                                    |
+| Values written, all replied OK, gone after reboot                  | `envswitch` was written before the `sys configuration` writes                    |
+| SSH worked, gone after a reboot                                    | The flash marker was never written                                               |
+| Speaker plays but ignores presets, source reads LOCAL              | A Lifestyle console sitting on its own input, not SoundTouch                     |
+| Everything else checks out, plays nothing, service sees NO request | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below |
+
+## It answers, and refuses every source
+
+A speaker can pass every check in the table and still be silent: all four URLs local, account
+bound, six presets in the adapter format, `LOCAL_INTERNET_RADIO` READY, wired and reaching the
+internet. Nothing above explains it, because the fault is the speaker's own state machine, stuck
+in setup. `/now_playing` is the only endpoint that shows it, in one of two shapes:
+
+```bash
+curl -s http://<speaker-ip>:8090/now_playing
+# before anyone has touched it:
+#   <nowPlaying ... source="SETUP"><ContentItem source="SETUP" isPresetable="true" /></nowPlaying>
+# after a button has been pressed:
+#   <error value="1043" name="EVENT_IN_WRONG_STATE">NowPlaying not supported in current state: Inactive</error>
+```
+
+Both mean the same thing, and neither is a normal idle state. `STANDBY` is what a healthy sleeping
+speaker returns.
+
+**The tell that separates this from every row above: the speaker issues NO request at all.** A
+preset press leaves nothing in the service's interaction record, because the speaker never gets as
+far as asking. Inspecting the service therefore finds nothing wrong, correctly, and that clean bill
+of health is the misleading part.
+
+Clear it with a POWER key press over HTTP, the API's own power button:
+
+```bash
+curl -X POST -d '<key state="press" sender="Gabbo">POWER</key>'   http://<speaker-ip>:8090/key
+curl -X POST -d '<key state="release" sender="Gabbo">POWER</key>' http://<speaker-ip>:8090/key
+```
+
+Read `/now_playing` straight after the release call: it returns `STANDBY` at once, and a
+preset then plays. There is no waiting involved, so if it still answers
+`EVENT_IN_WRONG_STATE` on that immediate read, the key press did not take and a restart is
+the next step. Only the HTTP path has been measured; whether the physical button on the
+unit clears the same state is untested, so use the call.
+
+What puts a speaker into this state is not established. It has been seen on a speaker that
+had been up for hours rather than one freshly booted, so do not assume a recent restart or
+a power blip explains it, and do not expect a migration to be involved.
+
+**Do not reach for a reboot or a power cycle first.** Both do clear it, and both are the wrong
+first move: they cost the 55-to-92-second readiness window for something a key press fixes in a
+second, and they put the presets through a boot for no reason. Reach for a restart only if the key
+press does not take.
 
 ## One question per command
 
@@ -51,11 +97,11 @@ read; it is write-only, and only a reboot reveals what it holds.
 
 Measured over ten observed reboots, and it is a RANGE, not a moment:
 
-| Step                                      | Time                            |
-|-------------------------------------------|---------------------------------|
-| `sys reboot` until the speaker drops       | 2.3 to 5.3 s                    |
-| Able to answer `getpdo` over 17000 again   | 55 to 92 s, median about 70 s   |
-| Radio sources ready                        | after that, not with it         |
+| Step                                     | Time                          |
+|------------------------------------------|-------------------------------|
+| `sys reboot` until the speaker drops     | 2.3 to 5.3 s                  |
+| Able to answer `getpdo` over 17000 again | 55 to 92 s, median about 70 s |
+| Radio sources ready                      | after that, not with it       |
 
 **Readiness is per-port, not a single moment.** Port 8090 and the diagnostic port do not come back
 together: waiting for 8090 and then immediately reading over 17000 returns an empty response on a

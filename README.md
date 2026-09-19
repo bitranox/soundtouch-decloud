@@ -40,15 +40,6 @@ This repo is itself a Claude Code plugin marketplace, so it installs directly:
 /plugin install soundtouch-decloud
 ```
 
-The same skill also ships in the central bitranox marketplace as `infra-soundtouch-decloud`:
-
-```
-/plugin marketplace add bitranox/bitranox-skills
-/plugin install bitranox
-```
-
-Install one or the other, not both.
-
 ## Use it
 
 Describe the problem in your own words and Claude loads the skill. Anything like "my Bose

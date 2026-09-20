@@ -17,11 +17,18 @@ import socket
 import time
 import urllib.parse
 import urllib.request
+from email.utils import parsedate_to_datetime
 
 TELNET_PORT = 17000
 API_PORT = 8090
 SSH_PORT = 22
 PROMPT = b"->"
+
+# How far a speaker's clock may be out before it is called wrong. A whole DAY, because the reading
+# it judges comes from the speaker's own Date header, which renders the box's LOCAL time and then
+# labels it GMT - so a perfectly correct clock reads a full UTC offset out, and no offset on earth
+# reaches a day. The fault this catches is eleven years, not minutes.
+CLOCK_TOLERANCE_S = 86400
 
 URL_FIELDS = ("margeServerUrl", "statsServerUrl", "swUpdateUrl", "bmxRegistryUrl")
 CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
@@ -43,6 +50,7 @@ __all__ = [
     "missing_streams", "parse_presets", "parse_preset_slots", "port_open", "telnet_run", "http_get",
     "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
     "preset_name", "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
+    "http_date_header", "clock_state", "CLOCK_TOLERANCE_S",
     "SpeakerError",
 ]
 
@@ -400,3 +408,40 @@ def http_get(url: str, timeout: float = 8.0) -> str:
             return resp.read().decode("utf-8", "replace")
     except OSError as exc:
         raise SpeakerError(f"{url}: {exc}") from exc
+
+
+def http_date_header(ip: str, timeout: float = 8.0) -> str | None:
+    """The Date header the speaker's own web server sends, or None if it did not answer.
+
+    This is how the clock of a speaker with NO SSH can still be read: its HTTP server renders its
+    system clock into every response. Nothing on that port can SET a clock, so this is a diagnosis
+    only. A failure is a None rather than an exception, because a speaker that does not answer is a
+    normal reading here and must not stop the rest of the survey.
+    """
+    try:
+        with urllib.request.urlopen(f"http://{ip}:{API_PORT}/info",  # noqa: S310 - literal scheme
+                                    timeout=timeout) as resp:
+            return resp.headers.get("Date")
+    except (OSError, ValueError):
+        return None
+
+
+def clock_state(header: str | None, now: float | None = None,
+                *, tolerance_s: int = CLOCK_TOLERANCE_S) -> dict[str, object]:
+    """Judge a speaker's clock from its Date header: ok, wrong, or unknown.
+
+    `reading` is the wall clock the box itself reported, printed as the box printed it, because that
+    is what an owner needs to see - "2015-07-06 20:36:50" says what no verdict word can. The
+    comparison is deliberately coarse; see CLOCK_TOLERANCE_S for why a day is both necessary and
+    sufficient.
+    """
+    if not header:
+        return {"verdict": "unknown", "reading": None}
+    try:
+        stamp = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return {"verdict": "unknown", "reading": None}
+    epoch = stamp.timestamp()
+    moment = time.time() if now is None else now
+    return {"verdict": "ok" if abs(epoch - moment) <= tolerance_s else "wrong",
+            "reading": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(epoch))}

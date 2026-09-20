@@ -7,6 +7,27 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.5.0] 2026-09-20
+
+### Added
+
+- **A speaker's clock can be read without a shell, and the survey now does it.** Its own web server
+  writes its system clock into the `Date` header of every response, so `soundtouch_find.py` reads it
+  for each speaker and reports `clock-wrong` when the box is more than a day out. Until now a
+  speaker with a dead clock passed every check and was reported `ready`, which is exactly wrong:
+  nothing structural is broken and no https station will play. The new verdict carries advice in the
+  owner's words, including the plain-http station that confirms it.
+
+  The comparison is deliberately coarse. The header renders the box's LOCAL time and then labels it
+  GMT, so a correct clock can read a whole UTC offset out; the tolerance is a day, which clears
+  every offset on earth and still catches the eleven-year jump a power cut produces. `clock_state`
+  and `http_date_header` in `soundtouch_core.py` are the new public functions, and a clock that
+  cannot be read leaves the verdict untouched, because not knowing is not a fault.
+
+  This matters most on a speaker whose SSH is closed, where the clock cannot be repaired remotely at
+  all - previously the one case with no way even to confirm the diagnosis. `access-and-rooting.md`
+  gains the one-request form and how to calibrate it against a speaker you can read both ways.
+
 ## [1.4.0] 2026-09-20
 
 ### Fixed

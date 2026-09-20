@@ -31,6 +31,26 @@ remotely. That is the reason to open it. Weigh it against the root-access cost u
 below, and put both to the owner rather than deciding for them. Where there is no reason against
 it, the answer is open.
 
+### Reading the clock without a shell
+
+A closed speaker cannot be repaired, but it can still be READ, which is what decides whether the
+clock is the fault at all. Its own web server writes its system clock into the `Date` header of
+every response, so one request answers the question:
+
+```bash
+curl -sD - -o /dev/null http://<speaker-ip>:8090/info | grep -i '^Date:'
+```
+
+`soundtouch_find.py` reads that for every speaker it surveys and reports `clock-wrong` when the box
+is more than a day out, so a speaker with a dead clock is no longer reported as `ready`.
+
+The reading has limits. It is the box's LOCAL time, which the header then labels GMT, so a correct
+clock can read a whole UTC offset out - judge it in days, never in seconds. It is a diagnosis and
+nothing more, because no request on that port can set a clock. And it is worth calibrating once on a
+speaker whose SSH IS open, where `date` over SSH and the header can be compared within the same
+minute: they print the same wall clock, which is what makes the header trustworthy on the speaker
+where you have no other way to look.
+
 ## Check what is already open
 
 ```bash

@@ -12,14 +12,14 @@ import json
 import sys
 
 try:
-    from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, cloud_leftovers,
-                                 http_get, parse_presets, parse_sources, parse_urls, port_open,
-                                 telnet_run)
+    from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, clock_state,
+                                 cloud_leftovers, http_date_header, http_get, parse_presets,
+                                 parse_sources, parse_urls, port_open, telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-    from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, cloud_leftovers,
-                                 http_get, parse_presets, parse_sources, parse_urls, port_open,
-                                 telnet_run)
+    from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, clock_state,
+                                 cloud_leftovers, http_date_header, http_get, parse_presets,
+                                 parse_sources, parse_urls, port_open, telnet_run)
 
 __all__ = ["build_parser", "classify", "describe_state", "speaker_state", "main"]
 
@@ -38,6 +38,12 @@ def classify(state: dict[str, object]) -> str:
         return "sources-not-ready"
     if not state.get("preset_count"):
         return "needs-presets"
+    # Last, because every fault above is both more actionable and able to produce a misleading
+    # clock reading on a box that is still coming up. A clock that could not be read at all leaves
+    # the verdict alone: not knowing is not a fault.
+    clock = state.get("clock") or {}
+    if isinstance(clock, dict) and clock.get("verdict") == "wrong":
+        return "clock-wrong"
     return "ready"
 
 
@@ -54,6 +60,11 @@ def describe_state(verdict: str) -> str:
         "sources-not-ready": "This speaker has not finished loading its radio sources. If it was "
                              "just restarted, give it about 80 seconds and look again.",
         "needs-presets": "This speaker is working but has no presets on it yet.",
+        "clock-wrong": "This speaker's clock is years out, which happens after a power cut because "
+                       "it has no battery to keep time. Everything else about it is fine, but no "
+                       "https station will play until the clock is put right - a plain http one "
+                       "still will, which is how to confirm it. If its SSH is open, one ntpd "
+                       "command fixes it; if not, it can only be done at the speaker.",
         "ready": "This speaker is set up and working.",
     }.get(verdict, verdict)
 
@@ -89,6 +100,9 @@ def speaker_state(ip: str) -> dict[str, object]:
         state["preset_count"] = len(parse_presets(http_get(f"http://{ip}:{API_PORT}/presets")))
     except SpeakerError as exc:
         state["presets_error"] = str(exc)
+    # Read from the speaker's own Date header, so this works on a box whose SSH is closed - the one
+    # place where a wrong clock is otherwise invisible and where nothing can repair it remotely.
+    state["clock"] = clock_state(http_date_header(ip))
     state["verdict"] = classify(state)
     state["advice"] = describe_state(str(state["verdict"]))
     return state

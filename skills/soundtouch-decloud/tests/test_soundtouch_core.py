@@ -253,3 +253,42 @@ def test_enable_ssh_and_migrate_disagree_about_the_marge_url_by_exactly_the_inje
              if c.startswith("envswitch boseurls set")][0]
     dirty = C.build_enable_ssh_commands("http://192.0.2.10:8000")[0]
     assert dirty.replace(C.SSH_INJECT, "") == clean
+
+
+# A speaker's own web server puts its system clock in the Date header of every response, which is
+# the only way to read the clock of a box whose SSH is closed. Both headers below are real shapes:
+# the box renders its LOCAL time and labels it GMT, so a correct clock can read a whole UTC offset
+# out. NOW is the true epoch of the moment the first header was captured.
+HEADER_NOW = "Sun, 20 Sep 2026 03:20:33 GMT"
+NOW = 1789867233
+HEADER_2015 = "Mon, 06 Jul 2015 20:36:50 GMT"
+
+
+def test_a_clock_within_the_tolerance_reads_ok_and_reports_what_the_box_said():
+    state = C.clock_state(HEADER_NOW, now=NOW)
+    assert state["verdict"] == "ok"
+    assert state["reading"] == "2026-09-20 03:20:33"
+
+
+def test_a_local_time_offset_is_not_mistaken_for_a_wrong_clock():
+    """The header labels local time as GMT, so a correct clock is hours out by construction."""
+    assert C.clock_state(HEADER_NOW, now=NOW - 7200)["verdict"] == "ok"
+    assert C.clock_state(HEADER_NOW, now=NOW + 7200)["verdict"] == "ok"
+
+
+def test_a_clock_left_in_2015_reads_wrong():
+    state = C.clock_state(HEADER_2015, now=NOW)
+    assert state["verdict"] == "wrong"
+    assert state["reading"] == "2015-07-06 20:36:50"
+
+
+def test_the_tolerance_clears_every_utc_offset_and_still_catches_the_real_fault():
+    """No offset on earth reaches a day, and the fault being caught is eleven years."""
+    assert C.CLOCK_TOLERANCE_S > 15 * 3600
+
+
+def test_no_header_or_an_unreadable_one_reads_unknown():
+    for header in (None, "", "whenever it feels like"):
+        state = C.clock_state(header, now=NOW)
+        assert state["verdict"] == "unknown"
+        assert state["reading"] is None

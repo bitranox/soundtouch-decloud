@@ -51,3 +51,27 @@ def test_the_not_answering_advice_tells_the_owner_to_wake_it():
 
 def test_the_sources_advice_gives_a_real_wait():
     assert "80" in F.describe_state("sources-not-ready")
+
+
+def test_a_clock_left_in_2015_is_named_rather_than_called_ready():
+    """Everything else green and no sound from any https station: the clock is the fault."""
+    assert F.classify(_state(clock={"verdict": "wrong", "reading": "2015-07-06 20:36:50"})) \
+        == "clock-wrong"
+
+
+def test_a_clock_that_could_not_be_read_changes_no_verdict():
+    """A speaker that answered nothing about its clock must not be reported as broken."""
+    assert F.classify(_state(clock={"verdict": "unknown", "reading": None})) == "ready"
+
+
+def test_a_structural_fault_outranks_a_wrong_clock():
+    """Rewriting the service URLs comes first; the clock cannot be judged from a migrated box."""
+    assert F.classify(_state(cloud_leftovers={"bmxRegistryUrl": "https://x.bose.io/y"},
+                             clock={"verdict": "wrong", "reading": "2015-07-06 20:36:50"})) \
+        == "needs-migration"
+
+
+def test_the_clock_advice_names_the_symptom_and_the_repair():
+    text = F.describe_state("clock-wrong").lower()
+    assert "https" in text or "internet radio" in text
+    assert text != "clock-wrong" and len(text) > 20

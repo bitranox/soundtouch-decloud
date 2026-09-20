@@ -7,6 +7,50 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.4.0] 2026-09-20
+
+### Fixed
+
+- **The Wireless Link Adapter was listed as a device the default enable-ssh form works on. It is
+  not.** Measured on one running 20.0.6: both forms were tried in order, each followed by a reboot
+  and the full readiness window, and port 22 stayed refused. The injection reached the runtime
+  `margeServerUrl` every time, so the write, the persistence and the boot copy all work - that
+  firmware simply never passes the value through a shell. It belongs in the group that needs
+  serial or U-Boot, and the file now says so, with the tell that distinguishes it from a speaker
+  that merely needs more time (`getpdo` shows the injection live while `sshd` is still not
+  running) and the instruction to clean the injection off rather than keep escalating.
+
+### Added
+
+- **`enable-ssh --assume-paired`, for firmware whose account field lies.** The precondition reads
+  `margeAccountUUID` from `/info` and refuses when it is empty, because a genuinely unpaired
+  speaker never reads `margeServerUrl` and the method would do nothing silently. On the Wireless
+  Link Adapter on 20.0.6 that field is empty while the speaker is paired and actively fetching
+  `/streaming/account/<id>/full` from the service, so the refusal is a false negative that blocks
+  the device class most in need of inspection. The bypass is documented with how to confirm the
+  pairing from the SERVICE side instead, which is the side that cannot lie about it, and the
+  envelope records `precondition_bypassed` so a later reader can tell a skipped check from a
+  satisfied one. Four tests, each RED-verified against a mutation that ignores the flag.
+
+### Changed
+
+- **Opening SSH is now recommended rather than described as optional.** The old wording said
+  "Opening it is optional. Do not do it to satisfy a checklist", and a test agent given the old
+  text and a finished migration duly recommended leaving it closed, correctly quoting that line.
+
+  The reason it is not optional is the clock. A SoundTouch has no battery-backed RTC and, with the
+  Bose cloud gone, nothing that sets its time: no init script starts `ntpd`, `/etc` is a read-only
+  ubifs so none can be added, and its DHCP client ignores option 42. It keeps good time while
+  powered and resets to 2015 on any power cut, after which TLS cannot validate and every HTTPS
+  station dies at BUFFERING while a plain-HTTP one plays - with every other check reading green.
+  The speaker cannot fix this itself, so the only repair is `ntpd -q` over SSH from outside. A
+  speaker whose SSH stays closed loses its radio at the next power cut and cannot be recovered
+  remotely.
+
+  The root-access cost is unchanged and still stated; what changed is that the file now puts both
+  sides to the owner instead of steering to closed by default. The symptom also has a row in the
+  troubleshooting table, because "HTTP plays and HTTPS does not" is what the owner actually sees.
+
 ## [1.3.0] 2026-09-20
 
 ### Added

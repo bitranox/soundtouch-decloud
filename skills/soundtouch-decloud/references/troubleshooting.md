@@ -5,20 +5,21 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 
 ## Symptom to cause
 
-| Symptom                                                            | Cause                                                                            |
-|--------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| Service starts, finds no speakers at all                           | Bridge networking. Discovery is multicast; use host networking                   |
-| One speaker missing, others found                                  | Asleep, on a guest network, or on a different subnet                             |
-| `/sources` lists no radio source                                   | `bmxRegistryUrl` still points at the dead cloud                                  |
-| All four URLs local, still no radio source                         | No account bound; check `margeAccountUUID`                                       |
-| Presets accepted, gone after every reboot                          | The boot wipe. Try a per-speaker account id before automating around it          |
-| Preset selected, nothing plays, gives up after ~20 s               | The location is a raw stream URL, not the playback adapter                       |
-| Buffering, then gives up after ~20 s                               | Format is right. Either the audio never arrived, or upstream issue #604          |
-| Everything worked, then all speakers broke at once                 | The service's address changed                                                    |
-| Values written, all replied OK, gone after reboot                  | `envswitch` was written before the `sys configuration` writes                    |
-| SSH worked, gone after a reboot                                    | The flash marker was never written                                               |
-| Speaker plays but ignores presets, source reads LOCAL              | A Lifestyle console sitting on its own input, not SoundTouch                     |
-| Everything else checks out, plays nothing, service sees NO request | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below |
+| Symptom                                                            | Cause                                                                                                          |
+|--------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| Service starts, finds no speakers at all                           | Bridge networking. Discovery is multicast; use host networking                                                 |
+| One speaker missing, others found                                  | Asleep, on a guest network, or on a different subnet                                                           |
+| `/sources` lists no radio source                                   | `bmxRegistryUrl` still points at the dead cloud                                                                |
+| All four URLs local, still no radio source                         | No account bound; check `margeAccountUUID`                                                                     |
+| Presets accepted, gone after every reboot                          | The boot wipe. Try a per-speaker account id before automating around it                                        |
+| Preset selected, nothing plays, gives up after ~20 s               | The location is a raw stream URL, not the playback adapter                                                     |
+| Buffering, then gives up after ~20 s                               | Format is right. Either the audio never arrived, or upstream issue #604                                        |
+| Everything worked, then all speakers broke at once                 | The service's address changed                                                                                  |
+| Values written, all replied OK, gone after reboot                  | `envswitch` was written before the `sys configuration` writes                                                  |
+| SSH worked, gone after a reboot                                    | The flash marker was never written                                                                             |
+| Speaker plays but ignores presets, source reads LOCAL              | A Lifestyle console sitting on its own input, not SoundTouch                                                   |
+| Everything else checks out, plays nothing, service sees NO request | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below                               |
+| Plain-HTTP stations play, every HTTPS one dies at BUFFERING        | The speaker's clock. No RTC battery, so a power cut resets it to 2015 and TLS fails; see access-and-rooting.md |
 
 ## It answers, and refuses every source
 

@@ -11,8 +11,25 @@ on a vanilla ST10 running 27.0.6 a probe found `envswitch` itself missing from t
 while other units on the same firmware family accept it. Treat a missing `envswitch` as a
 recoverable preflight result, not a broken speaker, and say so rather than retrying.
 
-**Port 22 is SSH, and is closed on a stock speaker.** It is only needed for the service endpoints
-that act on the speaker directly. Opening it is optional. Do not do it to satisfy a checklist.
+**Port 22 is SSH, and is closed on a stock speaker. Open it where you can.** Not to satisfy a
+checklist: because the clock repair runs over it, and nothing on the speaker can do that job.
+
+A SoundTouch has no battery-backed RTC and, with the Bose cloud gone, nothing that sets its clock:
+no init script starts `ntpd`, `/etc` is a read-only ubifs so none can be added, and its DHCP client
+ignores option 42. It keeps good time while powered and resets to 2015 the moment power is cut.
+TLS cannot validate a certificate against a clock eleven years out, so every HTTPS station then
+dies at BUFFERING and INVALID_SOURCE while a plain-HTTP one plays normally, with every other check
+reading green. The speaker cannot repair this itself. The only repair is from outside, over SSH:
+
+```bash
+ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@<speaker-ip> \
+    'ntpd -q -n -p <lan-gateway>'
+```
+
+So a speaker whose SSH stays closed loses its radio at the next power cut and cannot be fixed
+remotely. That is the reason to open it. Weigh it against the root-access cost under "Logging in"
+below, and put both to the owner rather than deciding for them. Where there is no reason against
+it, the answer is open.
 
 ## Check what is already open
 
@@ -61,7 +78,7 @@ The firmware passes the URL value to a shell, so a suffix appended to it runs on
 ```
 
 The **default form** writes that through the persistence layer alone. It is the field-confirmed
-one, reported working on the Wireless Link Adapter and the CineMate 520 `lisa` variant:
+one on the CineMate 520 `lisa` variant, and it is what to try first everywhere:
 
 ```
 envswitch boseurls set "http://<service-host>:8000;touch /tmp/remote_services;/etc/init.d/sshd start" "http://<service-host>:8000/updates/soundtouch"
@@ -93,6 +110,15 @@ records the automation of it as candidate behaviour still awaiting confirmation 
 ST10 and CineMate 520 units never start `sshd` over telnet at all and need the serial or U-Boot
 route, which is outside this skill.
 
+**A Wireless Link Adapter on 20.0.6 is in that last group, measured 2026-09-20.** Both forms were
+tried on one, in order, each followed by a reboot and the full readiness window.
+The injection reached the runtime `margeServerUrl` every time - so the write, the persistence and
+the boot copy all work - and port 22 stayed refused. That firmware never passes the value through
+a shell. The tell that separates it from a speaker that simply needs more time: `getpdo` shows the
+injection live and `sshd` is still not running. Do not keep escalating on such a unit; clean the
+injection off with `migrate --confirm` so no shell text is left in a live configuration value, and
+tell the owner it needs physical access.
+
 Pauses between the commands are unnecessary. A controlled A/B across three variants found identical
 outcomes at zero and five second gaps, which retracted an earlier theory that the gap mattered.
 
@@ -102,6 +128,29 @@ outcomes at zero and five second gaps, which retracted an earlier theory that th
 absent through the 8.x-14.x era as well, so on anything recent it is a dead path rather than a first
 thing to try. Firmware 27.x is what this migration targets, and `sys configuration` and `envswitch`
 are confirmed working there on ST10, ST20, ST300, Wave III and Wave IV.
+
+### When the account field lies: `--assume-paired`
+
+The precondition above reads `margeAccountUUID` from `/info`, and on some firmware that field is
+EMPTY on a speaker that is properly paired. Measured on the Wireless Link Adapter on 20.0.6: the
+field reads empty while the speaker is fetching `/streaming/account/<id>/full` from the service
+with `User-Agent: Bose_Lisa/20.0.6`. The refusal is then a false negative, and it blocks the one
+device class that most needs looking at.
+
+Confirm the pairing from the SERVICE rather than from `/info`, which is the side that cannot lie
+about it - with `RECORD_INTERACTIONS` on, look for that speaker's own requests under the data
+directory - then re-run with the bypass:
+
+```bash
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
+    --service http://<service-host>:8000 enable-ssh --assume-paired --confirm
+```
+
+The envelope then carries `precondition_bypassed`, so a later reader can tell a skipped check from
+a satisfied one. Do NOT reach for this on a speaker that is genuinely unpaired: there the
+precondition is right, the injection has no read cycle to fire on, and the run does nothing at all
+while appearing to succeed.
+
 
 ## Making it survive a reboot
 
@@ -136,8 +185,10 @@ ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@<spe
 ```
 
 User `root`, no password. Tell the owner plainly: anyone on their network can log into the speaker
-as root once SSH is open. That is the reason to leave it closed unless something needs it, and the
-reason to close it again when the work is done - remove the persisted markers and reboot.
+as root once SSH is open. Weigh that against the clock repair above, which is
+the thing that usually needs it. To close it again, delete both markers named under "Making it
+survive a reboot" (`/etc/remote_services` and `/mnt/nv/remote_services`) and reboot; leaving one
+behind keeps SSH open at every future boot.
 
 A factory reset does NOT close it. Reset clears the account, the presets, the four URLs and the
 name, but the persisted markers survive and SSH and telnet stay open. Recovery from a reset is

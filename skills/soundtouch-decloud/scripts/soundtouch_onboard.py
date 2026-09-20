@@ -127,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ssh.add_argument("--full-config", action="store_true",
                        help="the longer form, plus a reboot: only for a speaker where the default "
                             "form persists but port 22 stays refused")
+    p_ssh.add_argument("--assume-paired", action="store_true",
+                       help="proceed although /info reports no account. ONLY for firmware that "
+                            "reports margeAccountUUID empty WHILE PAIRED (measured on the "
+                            "Wireless Link Adapter, 20.0.6). Confirm the speaker really reaches "
+                            "the service first - see access-and-rooting.md")
     p_play = sub.add_parser("play", help="play a preset and prove it really played")
     p_play.add_argument("--preset", type=int, default=1)
     p_play.add_argument("--expect", required=True,
@@ -177,14 +182,19 @@ def main(argv: list[str] | None = None) -> int:
             if port_open(args.ip, SSH_PORT):
                 return emit(True, {"note": "port 22 is already open; nothing to do"})
             bound = account_uuid(args.ip)
-            if not bound:
+            if not bound and not args.assume_paired:
                 return emit(False, {"error": "this speaker has no account bound, so it never reads "
                                              "margeServerUrl and the injection would do nothing at "
                                              "all - silently. Bind an account first (see "
-                                             "migration.md), then run this again."}, code=2)
+                                             "migration.md), then run this again. If this is "
+                                             "firmware that reports the field empty WHILE paired "
+                                             "(the Wireless Link Adapter on 20.0.6 does), confirm "
+                                             "the speaker reaches the service and re-run with "
+                                             "--assume-paired."}, code=2)
             commands = build_enable_ssh_commands(args.service, full_config=args.full_config)
             if not args.confirm:
-                return emit(False, {"would_run": commands, "account": bound,
+                return emit(False, {"would_run": commands,
+                                    "account": bound or "(empty; proceeding on --assume-paired)",
                                     "note": "re-run with --confirm. This writes shell text into a "
                                             "live configuration value, which migrate must clean up "
                                             "afterwards."})
@@ -195,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
             report = {"telnet": replies,
                       "truncated_replies": [r["cmd"] for r in replies if not r["complete"]],
                       "ssh_open": opened}
+            if not bound:
+                # Visible in the envelope on purpose: a run that skipped the precondition must say
+                # so, or a later reader cannot tell a bypassed check from a satisfied one.
+                report["precondition_bypassed"] = "margeAccountUUID empty; --assume-paired given"
             if opened:
                 return emit(True, {**report,
                                    "next": "Now run `migrate --confirm` to rewrite the four URLs "

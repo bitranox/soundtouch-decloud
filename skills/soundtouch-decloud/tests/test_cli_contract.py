@@ -238,3 +238,55 @@ def test_a_redirect_ends_the_command_but_a_placeholder_argument_does_not() -> No
     assert argv == ["check", "--ip", "<speaker-ip>", "--template", "<file>",
                     "--service", "<service>"]
     P.build_parser().parse_args(argv)
+
+
+def test_enable_ssh_refuses_an_empty_account_unless_the_bypass_is_given(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The refusal must name the bypass, or the one firmware that needs it reads as unsupported."""
+    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    rc = O.main(["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000",
+                 "enable-ssh", "--confirm"])
+    body = _envelope(capsys)
+    assert rc == 2
+    assert "--assume-paired" in str(body["data"])
+
+
+def test_assume_paired_proceeds_on_a_speaker_that_reports_no_account(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A Wireless Link Adapter on 20.0.6 reports the field empty while paired and polling.
+
+    Without the bypass the command exits 2 and writes nothing, so the device is unreachable by
+    the documented route for a reason that is not true of it.
+    """
+    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "telnet_run", _accepted)
+    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
+    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
+    replies = iter([False, True])
+    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+    rc = O.main([*ENABLE, "--assume-paired"])
+    body = _envelope(capsys)
+    assert rc == 0
+    assert body["data"]["ssh_open"] is True
+
+
+def test_a_bypassed_precondition_is_recorded_in_the_envelope(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A run that skipped a safety check must say so, or a reader cannot tell it from a clean one."""
+    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "telnet_run", _accepted)
+    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
+    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
+    replies = iter([False, True])
+    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+    O.main([*ENABLE, "--assume-paired"])
+    assert "precondition_bypassed" in _envelope(capsys)["data"]
+
+
+def test_a_paired_speaker_records_no_bypass(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The control: the marker must not appear on an ordinary run, or it means nothing."""
+    _stub_speaker(monkeypatch, [False, True])
+    O.main([*ENABLE, "--assume-paired"])
+    assert "precondition_bypassed" not in _envelope(capsys)["data"]

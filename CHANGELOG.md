@@ -7,6 +7,23 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.6.0] 2026-09-21
+
+### Added
+
+- **Setting the timezone is now a standard step for every speaker whose SSH is open.** A speaker's
+  zone is the symlink `/mnt/nv/localtime`, whose factory value is `/usr/share/zoneinfo/NOT_SET`,
+  and a speaker can come through setup and migration with it still unset. Nothing reports that:
+  the box runs on UTC and `date` prints `GMT` where its siblings print their local zone.
+  `access-and-rooting.md` gains the check and the one-line repair, guarded by `test -f` so a zone
+  the firmware does not ship is never linked, plus what to do when that guard fails. `/mnt/nv` is
+  already writable and persistent, so no remount is needed, and running processes pick the change
+  up at once. Phase 7 in the walkthrough now names it.
+
+  It is framed as removing a difference from a healthy speaker, not as a cure: the one speaker in a
+  six-speaker fleet left on `NOT_SET` was also the only one that kept dropping into SETUP, and the
+  text says plainly that nobody has shown one caused the other.
+
 ## [1.5.0] 2026-09-20
 
 ### Added

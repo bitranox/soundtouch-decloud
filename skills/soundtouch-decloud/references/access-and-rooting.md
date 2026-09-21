@@ -31,6 +31,45 @@ remotely. That is the reason to open it. Weigh it against the root-access cost u
 below, and put both to the owner rather than deciding for them. Where there is no reason against
 it, the answer is open.
 
+### Set the timezone while you are in
+
+This is a standard step for every speaker whose SSH is open, not a fix for a symptom. Check it once
+per speaker, and set it wherever it is unset.
+
+`/etc/localtime` on a SoundTouch is a symlink to `/mnt/nv/localtime`, and `/mnt/nv` is the
+speaker's writable, persistent store: the same place the SSH marker lives. The factory value is
+`/usr/share/zoneinfo/NOT_SET`, which makes the speaker run on UTC. Setup normally replaces it with
+a real zone, but a speaker can come through setup and migration with it still unset. Nothing
+reports that; the only outward sign is that `date` on the box prints `GMT` where its siblings print
+their local zone.
+
+Read it on every speaker, and set it to the OWNER's zone (an IANA name such as `Europe/Berlin`),
+never a zone copied from an example. Type it in a root session opened as under "Logging in" below:
+
+```sh
+readlink /mnt/nv/localtime
+zone=Europe/Berlin    # the owner's zone
+test -f /usr/share/zoneinfo/$zone && ln -sf /usr/share/zoneinfo/$zone /mnt/nv/localtime && sync
+readlink /mnt/nv/localtime; date
+```
+
+The `test -f` matters: a symlink to a zone the firmware does not ship would leave the speaker with
+no usable zone at all. If it fails, the link is left untouched; list what the firmware ships with
+`ls /usr/share/zoneinfo/<region>`, pick the owner's city or the nearest one in the same zone, and
+if nothing fits leave `NOT_SET` in place and tell the owner. No remount is needed, because `/mnt/nv` is already writable, and the change
+survives a reboot for the same reason the SSH marker does. Running processes pick it up at once:
+measured on a SoundTouch 20 on 27.0.6, the speaker's own web server switched its `Date` header to
+local time within the same minute, with no reboot. To undo it, point the link back at
+`/usr/share/zoneinfo/NOT_SET`.
+
+Why it is standard: an unset zone is a difference from what setup leaves on a healthy speaker, and
+the reason to remove it is that it gets in the way of diagnosis. It also puts every speaker's `Date`
+header on the same footing, so the clock reading below compares like with like. In one fleet of six
+speakers, the only one left on `NOT_SET` was also the only one that kept dropping into SETUP while
+it was running. Nobody has shown that one caused the other, so do not tell an owner that setting
+the zone cures that fault. The point is that a speaker which still misbehaves after this step has
+one fewer difference to explain.
+
 ### Reading the clock without a shell
 
 A closed speaker cannot be repaired, but it can still be READ, which is what decides whether the

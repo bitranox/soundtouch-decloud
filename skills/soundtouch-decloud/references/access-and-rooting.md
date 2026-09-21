@@ -56,11 +56,11 @@ readlink /mnt/nv/localtime; date
 The `test -f` matters: a symlink to a zone the firmware does not ship would leave the speaker with
 no usable zone at all. If it fails, the link is left untouched; list what the firmware ships with
 `ls /usr/share/zoneinfo/<region>`, pick the owner's city or the nearest one in the same zone, and
-if nothing fits leave `NOT_SET` in place and tell the owner. No remount is needed, because `/mnt/nv` is already writable, and the change
-survives a reboot for the same reason the SSH marker does. Running processes pick it up at once:
-measured on a SoundTouch 20 on 27.0.6, the speaker's own web server switched its `Date` header to
-local time within the same minute, with no reboot. To undo it, point the link back at
-`/usr/share/zoneinfo/NOT_SET`.
+if nothing fits leave `NOT_SET` in place and tell the owner. No remount is needed, because `/mnt/nv`
+is already writable, and the change survives a reboot for the same reason the SSH marker does.
+Running processes pick it up at once: measured on a SoundTouch 20 on 27.0.6, the speaker's own web
+server switched its `Date` header to local time within the same minute, with no reboot. To undo
+it, point the link back at `/usr/share/zoneinfo/NOT_SET`.
 
 Why it is standard: an unset zone is a difference from what setup leaves on a healthy speaker, and
 the reason to remove it is that it gets in the way of diagnosis. It also puts every speaker's `Date`
@@ -69,6 +69,51 @@ speakers, the only one left on `NOT_SET` was also the only one that kept droppin
 it was running. Nobody has shown that one caused the other, so do not tell an owner that setting
 the zone cures that fault. The point is that a speaker which still misbehaves after this step has
 one fewer difference to explain.
+
+### Clock display and display language: the rest of an unfinished setup
+
+A speaker that was factory reset after the Bose cloud shut down, and then bound to the account
+through the replacement service, never ran the app's own setup. The timezone above is one setting
+it misses; two more stay at their factory values, while a speaker set up with the app has all three
+already set. Both are on the speaker's own API on port 8090, so they need no SSH, and the firmware
+writes its own persistent file when you set them.
+
+Read both on EVERY speaker, not only the one you suspect:
+
+```bash
+curl -s http://<speaker-ip>:8090/clockDisplay
+curl -s http://<speaker-ip>:8090/language
+```
+
+An unfinished speaker reads `timezoneInfo="NOT_SET"` with `userEnable="false"` and
+`TIME_FORMAT_12HOUR_ID`, and `<sysLanguage>0</sysLanguage>`. Set it by POSTing the same documents
+back, with the owner's zone and the values the owner's OTHER speakers read:
+
+```bash
+curl -s -X POST http://<speaker-ip>:8090/clockDisplay --data-binary \
+  '<clockDisplay><clockConfig timezoneInfo="Europe/Berlin" userEnable="true" timeFormat="TIME_FORMAT_24HOUR_ID" userOffsetMinute="0" brightnessLevel="70" userUtcTime="0" /></clockDisplay>'
+curl -s -X POST http://<speaker-ip>:8090/language --data-binary '<sysLanguage>2</sysLanguage>'
+```
+
+Copy `timeFormat`, `brightnessLevel` and the language number from a sibling's GET, not from this
+example. The mapping from language number to language is not documented here, so never pick one:
+with no sibling to copy from, or with siblings that disagree, leave the language at `0` and ask the
+owner which speaker's display language they want copied. Read both back after the POST; it answers
+with the new document.
+
+These POSTs, like the timezone link, are CHANGES to the speaker: say what will change and get the
+owner's yes first, as for any other write.
+
+Measured on a SoundTouch 20 on 27.0.6: both POSTs returned 200, the read-back showed the new values,
+the firmware wrote `ClockDisplay.xml` and `CurrentDisplayLanguage.xml` under
+`/mnt/nv/BoseApp-Persistence/1/` itself, and the speaker stayed in STANDBY throughout. NOT measured:
+whether the clock POST alone also moves `/mnt/nv/localtime`, because that speaker's link had already
+been set by hand. Where SSH is open, set the link as above as well and read it back.
+
+Leave the other files such a speaker lacks alone. `Marge.xml` holds an account token the Bose cloud
+issued to that one speaker and nothing can reissue it; a copy from another speaker is that speaker's
+token. `IoT.xml` points at Bose's IoT endpoint, which is gone. The rest are history lists, Bluetooth
+and AirPlay pairings and changed preferences, which appear by themselves when the speaker is used.
 
 ### Reading the clock without a shell
 

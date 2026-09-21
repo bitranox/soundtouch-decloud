@@ -7,6 +7,25 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.7.0] 2026-09-21
+
+### Added
+
+- **Clock display and display language join the timezone as standard phase-7 checks.** A speaker
+  factory reset after the Bose cloud shut down, then bound through the replacement service, never
+  runs the app's setup, and leaves two more settings at factory values: `clockDisplay` reads
+  `timezoneInfo="NOT_SET"`, clock off, 12-hour, and `language` reads `0`. Both sit on the
+  speaker's own API on port 8090, so reading and setting them needs no SSH, and the firmware writes
+  its own persistent file when they are set. `access-and-rooting.md` gains the GET on every
+  speaker, the POST with values copied from a sibling rather than an example, and a refusal to
+  guess a language number when there is no sibling to copy from, since the mapping is not
+  documented. It also says which absent files to leave alone: the per-speaker cloud token in
+  `Marge.xml` cannot be reissued, and `IoT.xml` points at a dead endpoint.
+
+  What was measured and what was not is stated in the text: both POSTs were accepted and persisted
+  on a SoundTouch 20 on 27.0.6 without leaving STANDBY, but whether the clock POST alone moves the
+  timezone symlink is not known, so the symlink step stays.
+
 ## [1.6.0] 2026-09-21
 
 ### Added

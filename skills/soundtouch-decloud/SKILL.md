@@ -46,7 +46,7 @@ Ask one question at a time. Prefer multiple choice. Check in after each phase.
 | 4     | Start the container with host networking, verify it answers                        | service-setup.md      |
 | 5     | Find the speakers; ask the owner to wake any that do not answer                    | service-setup.md      |
 | 6     | Back up every speaker BEFORE any change                                            | presets.md            |
-| 7     | Open SSH over the diagnostic port IF something needs it, make it persist, set TZ   | access-and-rooting.md |
+| 7     | Open SSH IF something needs it, make it persist; set TZ, clock display, language   | access-and-rooting.md |
 | 8     | Rewrite the four service URLs, verify nothing cloud is left                        | migration.md          |
 | 9     | Wait for the radio sources; bind the account if they never mount                   | migration.md          |
 | 10    | Harvest the old presets, ask which stations they still want, validate every stream | presets.md            |
@@ -90,13 +90,13 @@ them.
 
 Use the Read tool to load the file for the phase you are in. Do not answer from this table alone.
 
-| Topic                                                                                                                                                                                       | File                             |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
-| Docker check and install per OS, compose file, host networking, env, discovery, waking a speaker                                                                                            | references/service-setup.md      |
-| Diagnostic port 17000, opening SSH over it and its precondition, making it survive a reboot, the clock repair, setting the timezone (/mnt/nv/localtime)                                     | references/access-and-rooting.md |
-| The four service URLs, the write order, verification, binding an account                                                                                                                    | references/migration.md          |
-| Where a stream URL comes from (harvest, research, validate), preset location format, the boot wipe, measuring before automating, alerting instead of auto-repair, backup, the JSON template | references/presets.md            |
-| Symptom to cause, the diagnostic one-liners, how long each step takes, upstream docs                                                                                                        | references/troubleshooting.md    |
+| Topic                                                                                                                                                                                           | File                             |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
+| Docker check and install per OS, compose file, host networking, env, discovery, waking a speaker                                                                                                | references/service-setup.md      |
+| Diagnostic port 17000, opening SSH over it and its precondition, making it survive a reboot, the clock repair, setting the timezone (/mnt/nv/localtime), clockDisplay and language over the API | references/access-and-rooting.md |
+| The four service URLs, the write order, verification, binding an account                                                                                                                        | references/migration.md          |
+| Where a stream URL comes from (harvest, research, validate), preset location format, the boot wipe, measuring before automating, alerting instead of auto-repair, backup, the JSON template     | references/presets.md            |
+| Symptom to cause, the diagnostic one-liners, how long each step takes, upstream docs                                                                                                            | references/troubleshooting.md    |
 
 ## Scripts
 

@@ -9,6 +9,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+CLAUDE.md
 CLAUDE.local.md
 .remember/
 EXECUTION-USER-REVIEW.md

@@ -5,7 +5,9 @@ pass. A gate that cannot fail is the failure mode worth guarding: it reports suc
 nobody notices it stopped looking.
 """
 import json
+import os
 import pathlib
+import subprocess
 
 import check_repo as G
 import pytest
@@ -125,6 +127,38 @@ def test_plain_ascii_prose_is_left_alone(repo):
     """The negative control: the tell check must not fire on ordinary text."""
     (repo / "notes.md").write_text("A plain sentence - with a hyphen.\n", encoding="utf-8", newline="\n")
     assert G.check_no_typographic_tells(repo) == []
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
+                   env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+
+
+@pytest.fixture
+def git_repo(repo):
+    """The fixture as a git work tree, with one ignored directory, the shape a real clone has."""
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8", newline="\n")
+    _git(repo, "init", "-q")
+    return repo
+
+
+def test_a_gitignored_file_is_not_the_repo(git_repo):
+    """A local tool's buffer in an ignored directory never ships, so it cannot fail the gate."""
+    (git_repo / "scratch").mkdir()
+    (git_repo / "scratch" / "now.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
+    assert G.check_no_typographic_tells(git_repo) == []
+
+
+def test_a_new_file_not_yet_added_is_still_checked(git_repo):
+    """The gate runs before a commit, so an untracked file that is not ignored is about to ship."""
+    (git_repo / "notes.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
+    assert any("notes.md" in f for f in G.check_no_typographic_tells(git_repo))
+
+
+def test_a_non_ascii_path_is_checked_not_skipped(git_repo):
+    """git quotes such a path unless asked not to, and a quoted path opens nothing."""
+    (git_repo / "caf\u00e9.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
+    assert any("caf\u00e9.md" in f for f in G.check_no_typographic_tells(git_repo))
 
 
 # --- the real repo ----------------------------------------------------------------------------------

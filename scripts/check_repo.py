@@ -15,8 +15,10 @@ once instead of stopping at the first thing.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -103,11 +105,29 @@ def check_tests_exist(root: pathlib.Path) -> list[str]:
     return fails
 
 
+def _repo_files(root: pathlib.Path) -> list[pathlib.Path] | None:
+    """The files git would ship from this tree - tracked, plus new ones not ignored - or None.
+
+    Asked of git rather than walked, because a walk also reads what .gitignore keeps out: a local
+    tool's buffer or a scratch file then fails the gate on one machine and never in CI. -z keeps a
+    non-ASCII path unquoted, where the default output quotes it into a name that opens nothing.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, check=True, env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [root / name for name in out.decode("utf-8").split("\0") if name]
+
+
 def _tracked_text_files(root: pathlib.Path) -> list[pathlib.Path]:
-    """Text files worth checking, skipping the places generated junk lives."""
-    skip = {".git", "__pycache__", ".venv"}
-    return [p for p in sorted(root.rglob("*"))
-            if p.is_file() and p.suffix in TEXT_SUFFIXES and not skip & set(p.parts)]
+    """Text files worth checking: what git would ship, or every file outside a git work tree."""
+    files = _repo_files(root)
+    if files is None:
+        skip = {".git", "__pycache__", ".venv"}
+        files = [p for p in root.rglob("*") if not skip & set(p.relative_to(root).parts)]
+    return sorted(p for p in files if p.is_file() and p.suffix in TEXT_SUFFIXES)
 
 
 def check_line_endings(root: pathlib.Path) -> list[str]:

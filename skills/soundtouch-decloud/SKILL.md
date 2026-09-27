@@ -82,9 +82,9 @@ a left/right STEREO PAIR, and whether any unit is a Lifestyle or CineMate consol
 SoundTouch speaker. Both change what happens later, and neither is visible from the network.
 
 A stereo pair does NOT need to be broken up. The SoundTouch 10 is the only model that supports one,
-the shutdown broke it, and AfterTouch restores it through `soundtouch-cli`. Ask so you know the two
-halves belong together and can expect them to be re-paired at the end, not so you can dismantle
-them.
+the shutdown broke it, and AfterTouch restores it: in `soundtouch-player` on a speaker's detail page
+(since v0.130.0), or with `soundtouch-cli`. Ask so you know the two halves belong together and can
+expect them to be re-paired at the end, not so you can dismantle them.
 
 ## Reference files
 
@@ -138,7 +138,7 @@ issue rather than something they did wrong.
 |--------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Bridge networking, or adding a `ports:` block                      | Service answers HTTP and discovers nothing. Looks installed, is useless                                                                                                                                                    |
 | Migrating before backing up the presets                            | A migration that leaves `bmxRegistryUrl` on the cloud makes the speaker discard every preset and send its empty set back to the service. Observed once, six presets. A REBOOT does not do this - see references/presets.md |
-| Installing a repair timer without measuring the wipe first         | A silent writer for a loss that is not happening, which also reverts any station changed on the speaker                                                                                                                    |
+| Running `restore` on a timer                                       | A silent writer for a loss that is usually not happening. It reverts any station changed on the speaker, and since AfterTouch v0.137.0 on every speaker of the account                                                     |
 | Rewriting only the account URL                                     | Presets sync and nothing ever plays                                                                                                                                                                                        |
 | Writing the persisting command before the others                   | Every value reverts at the next reboot although each replied OK                                                                                                                                                            |
 | Skipping the persistent marker after opening SSH                   | Access is gone at the next boot and looks like it never worked                                                                                                                                                             |

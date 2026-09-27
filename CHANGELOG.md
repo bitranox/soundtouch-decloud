@@ -7,6 +7,62 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.8.0] 2026-09-27
+
+Everything here comes from a review by the AfterTouch maintainer
+(gesellix/Bose-SoundTouch#660), each point checked against the upstream tree at v0.137.1.
+
+### Fixed
+
+- **`check` and `restore` no longer misread presets that AfterTouch wrote.** A slot was compared
+  by decoding only the `/custom/v1/playback` form, so a preset in the Orion form that the player
+  and `soundtouch-cli` store decoded to nothing and never compared equal. `check` then exited 1
+  for it forever, and a scheduled `restore` rewrote the owner's button on every run. Slots are now
+  compared by the stream they stand for, in either form or as a bare URL.
+- **`harvest` no longer turns a Spotify or library preset into a radio station.** Every slot was
+  emitted as `LOCAL_INTERNET_RADIO`, so an album came back as a named hole, and writing it made it
+  radio without saying so. A non-radio preset is now carried over exactly as stored and marked
+  `keep`. `validate` reports it as `kept`, `check` and `restore` leave its button alone, and
+  `harvest` lists it under `kept`.
+- **The README promised a preset backup that does not exist.** It said the service writes
+  `preset-backups/<MAC>-presets-before-migration.xml` when a speaker migrates. It writes no preset
+  backup at all; the only migration-time copies are two configuration files, over SSH, and none
+  with `method=telnet`. The README and `references/presets.md` now say what the service keeps:
+  `Presets.xml` per device, written on every preset save, not only on a Sync, and the preset
+  catalog in `catalog.json`.
+- **The add-a-speaker-by-IP command could not work as printed.** `POST /api/setup/devices` needs a
+  JSON body `{"ip": ...}` and answers 400 without one. Fixed in `service-setup.md`, where it is the
+  only route on Docker Desktop, and added to `migration.md`, which named the step and gave no
+  command.
+- **The admin gate was described wrongly.** `/api/setup/*` is open whatever `MGMT_PASSWORD` is,
+  unless `admin_area_auth` is set to `enabled`, and the service refuses that while the credentials
+  are still the published default.
+- **The account-id 400 was explained wrongly.** The pair-account body is never read; the 400 is for
+  the missing `account_id` query parameter.
+- **Stereo pairing is not CLI-only.** The player has done it from a speaker's detail page since
+  v0.130.0.
+- **`scripts/check_repo.py` read files git never ships.** It walked the filesystem, so a gitignored
+  local buffer containing a banned character failed the gate on one machine and never in CI. It now
+  asks git for the tracked and new-but-not-ignored files, and walks only outside a git work tree.
+
+### Changed
+
+- **Presets are written in the Orion form**, byte for byte as upstream's `BuildOrionLocation`
+  builds it, pinned by golden values produced by upstream's own Go code. The player's catalog, its
+  stored-versus-reported comparison and its sharing between speakers now see one format.
+  `presets.md` gains a check to run after each AfterTouch update, since the builder is a copy.
+- **No more restore on a timer.** The cron line and the systemd unit pair are gone. Since
+  AfterTouch v0.137.0 a preset written to one speaker is shared with the others on the account, so
+  a repair loop on one box overrules the owner on all of them, and the service now keeps and
+  reconciles presets itself. `presets.md` points at those tools in order: the speaker's own fetch,
+  the player's "Keep ours / Take the speaker's", "Refresh sources on speaker" and the Health
+  QuickFix, and `setup sync --confirm`. The skill keeps its off-service snapshot, a one-shot
+  `restore`, and the read-only `check` alarm. `restore` now says in its output that a write can
+  reach the other speakers.
+- **`render` no longer sets `HTTPS_SERVER_URL`.** The service derives it from `SERVER_URL`, so
+  setting it only kept a second copy of the address to go stale. `service-setup.md` also says that
+  settings saved in the admin UI take precedence over the compose file's environment.
+
 ## [1.7.0] 2026-09-21
 
 ### Added

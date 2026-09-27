@@ -23,6 +23,44 @@ def test_render_advertises_the_given_host_not_loopback():
     assert "127.0.0.1" not in out and "localhost" not in out
 
 
+# Every variable upstream's soundtouch-service reads from the environment, as of v0.137.1
+# (cmd/soundtouch-service/main.go). A name missing here that render emits is one upstream ignores.
+UPSTREAM_ENV = {
+    "AMAZON_CLIENT_ID", "AMAZON_CLIENT_SECRET", "AMAZON_PROFILE_URL", "AMAZON_REDIRECT_URI",
+    "AMAZON_TOKEN_URL", "BASE_URL", "BIND_ADDR", "DATA_DIR", "DEPLOYMENT_MODE",
+    "DEVICE_SEED_RETRY_INTERVAL", "DEVICE_SEED_RETRY_WINDOW", "DISCOVERY_ENABLED",
+    "DISCOVERY_INTERVAL", "DNS_BIND_ADDR", "DNS_UPSTREAM", "ENABLE_DNS_DISCOVERY", "HTTPS_PORT",
+    "HTTPS_SERVER_URL", "INTERNAL_PATHS", "LOG_PROXY_BODY", "MGMT_PASSWORD", "MGMT_USERNAME",
+    "MIGRATION_DRY_RUN", "MIGRATION_ENABLED", "PORT", "RECORD_INTERACTIONS", "REDACT_PROXY_LOGS",
+    "SERVER_URL", "SPOTIFY_API_BASE", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET",
+    "SPOTIFY_REDIRECT_URI", "SPOTIFY_TOKEN_URL", "STOCKHOLM_BASE_PATH", "STOCKHOLM_DIR",
+    "TLS_EXTRA_HOST", "TTS_APP_KEY", "TTS_GOOGLE_API_KEY", "TTS_GOOGLE_ENDPOINT", "TTS_LANGUAGE",
+    "TTS_PROVIDER", "TTS_VOICE", "TTS_VOLUME", "TUNEIN_API_URL", "TUNEIN_OPML_URL",
+    "UPDATE_CHECK_ENABLED", "UPDATE_CHECK_INTERVAL",
+}
+
+
+def _env_keys(compose: str) -> set[str]:
+    block = compose.split("    environment:\n", 1)[1].split("    volumes:", 1)[0]
+    return {line.strip().split(":", 1)[0] for line in block.splitlines() if line.strip()}
+
+
+def test_render_emits_exactly_the_variables_it_means_to():
+    assert _env_keys(S.render_compose("192.0.2.10")) == {
+        "PORT", "HTTPS_PORT", "DATA_DIR", "SERVER_URL", "MGMT_USERNAME", "MGMT_PASSWORD",
+        "RECORD_INTERACTIONS", "DISCOVERY_INTERVAL"}
+
+
+def test_every_rendered_variable_is_one_upstream_reads():
+    assert _env_keys(S.render_compose("192.0.2.10")) <= UPSTREAM_ENV
+
+
+def test_render_leaves_the_https_url_to_be_derived():
+    """Upstream derives it from SERVER_URL when unset. Setting it pins a second copy of the
+    address that goes stale the day SERVER_URL is changed without it."""
+    assert "HTTPS_SERVER_URL" not in S.render_compose("192.0.2.10")
+
+
 def test_render_pins_the_requested_version():
     assert "bose-soundtouch:1.2.3" in S.render_compose("192.0.2.10", version="1.2.3")
 

@@ -3,6 +3,9 @@
 Every case here is a real reading that a plausible implementation gets wrong, so each test is
 written against the payload shape the speaker actually returns rather than a tidied-up sample.
 """
+import base64
+
+import pytest
 import soundtouch_core as C
 
 # getpdo puts the value on the line AFTER the field name.
@@ -110,33 +113,98 @@ def test_service_urls_tolerate_a_trailing_slash():
     assert C.service_urls("http://192.0.2.10:8000/")["swUpdateUrl"].count("//") == 1
 
 
-def test_playback_location_round_trips():
-    """URL-safe base64 WITH padding, matching what the service builds."""
+SERVICE = "http://192.0.2.10:8000"
+
+# Produced by upstream's own bmx.BuildOrionLocation (v0.137.1, pkg/service/bmx/bmx.go), run in Go,
+# not by this code. Byte equality is the point: the player compares, catalogues and shares what
+# it stores, so a location that decodes the same but is spelled differently is a second format.
+ORION_GOLDEN = [
+    (("Example Radio", "", "https://radio.example.com/live.mp3"),
+     "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data="
+     "eyJuYW1lIjoiRXhhbXBsZSBSYWRpbyIsImltYWdlVXJsIjoiIiwic3RyZWFtVXJsIjoiaHR0cHM6Ly9yYWRpby5leGFtc"
+     "GxlLmNvbS9saXZlLm1wMyJ9"),
+    # Go's json.Marshal escapes < > & as < > & and keeps non-ASCII as UTF-8.
+    (("Ö1 <live> & more", "https://img.example.com/a.png?x=1&y=2",
+      "https://stream.example.at/oe1-q2a.mp3?ua=SoundTouch&n=1"),
+     "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data="
+     "eyJuYW1lIjoiw5YxIFx1MDAzY2xpdmVcdTAwM2UgXHUwMDI2IG1vcmUiLCJpbWFnZVVybCI6Imh0dHBzOi8vaW1nLmV4Y"
+     "W1wbGUuY29tL2EucG5nP3g9MVx1MDAyNnk9MiIsInN0cmVhbVVybCI6Imh0dHBzOi8vc3RyZWFtLmV4YW1wbGUuYXQvb2"
+     "UxLXEyYS5tcDM%2FdWE9U291bmRUb3VjaFx1MDAyNm49MSJ9"),
+    # ... and U+2028 too; the padding '=' is query-escaped.
+    (("line sep", "", "http://s.example.com/a b"),
+     "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data="
+     "eyJuYW1lIjoibGluZVx1MjAyOHNlcCIsImltYWdlVXJsIjoiIiwic3RyZWFtVXJsIjoiaHR0cDovL3MuZXhhbXBsZS5jb"
+     "20vYSBiIn0%3D"),
+]
+
+
+@pytest.mark.parametrize(("args", "expected"), ORION_GOLDEN)
+def test_orion_location_is_byte_identical_to_upstream(args, expected):
+    name, image, stream = args
+    assert C.orion_location(SERVICE, stream, name, image_url=image) == expected
+
+
+@pytest.mark.parametrize(("args", "_expected"), ORION_GOLDEN)
+def test_orion_location_round_trips(args, _expected):
+    name, image, stream = args
+    assert C.stream_url_from_location(C.orion_location(SERVICE, stream, name, image_url=image)) == stream
+
+
+def test_orion_location_tolerates_a_trailing_slash_on_the_service():
+    assert C.orion_location(SERVICE + "/", "https://a.example.com/s", "A") == \
+        C.orion_location(SERVICE, "https://a.example.com/s", "A")
+
+
+def _legacy(stream: str) -> str:
+    """The /custom/v1/playback form this skill wrote before 1.8.0, still on speakers today."""
+    encoded = base64.urlsafe_b64encode(stream.encode()).decode()
+    return f"{SERVICE}{C.PLAYBACK_PATH}{encoded}?name=S"
+
+
+def test_the_legacy_playback_form_still_decodes():
     stream = "https://radio.example.com/stream?x=1&y=2"
-    loc = C.playback_location("http://192.0.2.10:8000", stream, "Example Radio")
-    assert C.PLAYBACK_PATH in loc
-    assert C.decode_playback_location(loc) == stream
-
-
-def test_playback_location_is_url_safe():
-    loc = C.playback_location("http://192.0.2.10:8000", "https://radio.example.com/a?b=1", "N")
-    encoded = loc.split(C.PLAYBACK_PATH, 1)[1].split("?", 1)[0]
-    assert "+" not in encoded and "/" not in encoded
+    assert C.decode_playback_location(_legacy(stream)) == stream
+    assert C.stream_url_from_location(_legacy(stream)) == stream
 
 
 def test_decode_ignores_a_raw_stream_url():
     assert C.decode_playback_location("https://radio.example.com/stream") == ""
 
 
-SERVICE = "http://192.0.2.10:8000"
+def _speaker_presets(*slots: tuple[int, str], form=None) -> str:
+    """The shape /presets really returns: each ContentItem inside a <preset id="N"> wrapper.
 
-
-def _speaker_presets(*slots: tuple[int, str]) -> str:
-    """The shape /presets really returns: each ContentItem inside a <preset id="N"> wrapper."""
+    By default every slot holds what this skill now writes. `form` swaps in another builder, for
+    a slot the player wrote or one left behind by an older version of this skill.
+    """
+    build = form or (lambda stream: C.orion_location(SERVICE, stream, "S"))
     return "<presets>" + "".join(
-        f'<preset id="{button}"><ContentItem '
-        f'location="{C.playback_location(SERVICE, stream, "S")}" /></preset>'
+        f'<preset id="{button}"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
+        f'location="{build(stream)}" /></preset>'
         for button, stream in slots) + "</presets>"
+
+
+def test_a_slot_the_player_wrote_counts_as_correct():
+    """AfterTouch's player and CLI store the Orion form, which must never read as missing.
+
+    Reading only our own old wrapping made `check` exit 1 forever for these and made `restore`
+    rewrite the owner's buttons on every run.
+    """
+    player = lambda stream: C.orion_location("http://aftertouch.example:8000", stream, "Player")  # noqa: E731
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
+    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=player), wanted) == []
+
+
+def test_a_slot_in_the_legacy_form_counts_as_correct():
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
+    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=_legacy), wanted) == []
+
+
+def test_a_kept_entry_is_never_written():
+    """A Spotify or library preset the skill does not manage must not be judged as missing."""
+    wanted = [{"buttonNumber": 2, "name": "Album", "location": "spotify:album:x", "keep": True,
+               "source": "SPOTIFY", "contentItemType": "tracklisturl"}]
+    assert C.slots_to_write(_speaker_presets(), wanted) == []
 
 
 def test_slots_to_write_compares_by_stream_not_by_count():

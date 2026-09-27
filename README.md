@@ -99,9 +99,10 @@ right but stays silent usually comes from. The skill does it in four steps:
 
 1. **Harvest.** A preset stored while the Bose cloud was alive carries the real stream URL inside
    it, so the owner's own presets usually already contain what is needed and there is nothing to
-   search for. The replacement service also writes a `preset-backups/<MAC>-presets-before-migration.xml`
-   by itself when a speaker migrates, so this often works even for someone who never exported
-   anything.
+   search for. That needs the presets as they were BEFORE the migration, and the replacement
+   service does not keep them: it stores each speaker's presets as it sees them from then on
+   (`accounts/<account>/devices/<id>/Presets.xml` in its data directory), and at migration it
+   copies only two configuration files. So the skill runs `backup` before it migrates anything.
 
    ```bash
    uv run scripts/soundtouch_presets.py harvest --backup <presets.xml> --out <speaker>.json
@@ -109,7 +110,8 @@ right but stays silent usually comes from. The skill does it in four steps:
 
    A preset that came from a catalogue source instead holds a station id and no stream. Those come
    back as named holes rather than being dropped, and a template with holes cannot be written to a
-   speaker until they are filled.
+   speaker until they are filled. A preset that is not radio at all, a Spotify album or a library
+   track, is carried over exactly as stored and left alone.
 
 2. **Ask.** The harvest gives the OLD station list. Whether that is still the wanted list is the
    owner's decision, so the skill asks before anyone researches anything.
@@ -132,16 +134,19 @@ right but stays silent usually comes from. The skill does it in four steps:
 
 ### Watching it, without silently repairing it
 
-The skill's advice is to MEASURE before installing anything that writes. Schedule the read-only
-check for a week and read what it found. Measured at one site over 18.7 days, a restore loop
-running every two minutes made 11692 runs and wrote presets exactly once, in its first hour,
-cleaning up a loss that predated it.
+The service keeps each speaker's presets and hands them back when the speaker fetches them, and
+its player shows where what it stores and what a speaker reports disagree, with a per-button
+choice between the two. The skill points there for day-to-day repair and installs nothing that
+writes on its own: since AfterTouch v0.137.0 a preset written to one speaker is shared with the
+others on the account, so a repair loop on one box overrules the owner on all of them.
 
-An always-on repair loop is not free: it reverts any station retuned on the speaker itself, and it
-hides the event you wanted to know about. The skill describes an alarm instead, built on the exit
-codes above, keeping "a speaker is short of presets" and "a speaker did not answer" apart. They
-need different patience: at that same site one sleeping WiFi speaker produced 1303 unreadable
-readings out of 11692 while never once being short.
+What the skill adds is a snapshot of each speaker's presets kept off the service, a one-shot
+`restore` from it, and a read-only `check` to run on a schedule as an alarm. Measured at one site
+over 18.7 days, a restore loop running every two minutes made 11692 runs and wrote presets
+exactly once, in its first hour, cleaning up a loss that predated it. So measure before
+automating anything. The alarm keeps "a speaker is short of presets" and "a speaker did not
+answer" apart, because they need different patience: at that same site one sleeping WiFi
+speaker produced 1303 unreadable readings out of 11692 while never once being short.
 
 ## Run the tests
 

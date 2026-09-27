@@ -30,6 +30,12 @@ PREMIGRATION = (
     'location="https://content.api.bose.io/core02/svc-bmx-adapter-orion/prod/orion/station'
     '?data=eyJuYW1lIjoiQ2F0YWxvZ3VlIn0%3D" sourceAccount="7654321" isPresetable="true">'
     '<itemName>Catalogue Station</itemName></ContentItem></preset>'
+    '<preset id="3"><ContentItem source="SPOTIFY" type="tracklisturl" '
+    'location="/playback/container/c3BvdGlmeTphbGJ1bTox" sourceAccount="owner@example.com" '
+    'isPresetable="true"><itemName>An Album</itemName></ContentItem></preset>'
+    '<preset id="4"><ContentItem source="STORED_MUSIC" type="album" '
+    'location="1$4$5" sourceAccount="00000000-0000-0000-0000-000000000000/0" '
+    'isPresetable="true"><itemName>Library Album</itemName></ContentItem></preset>'
     '</presets>')
 
 
@@ -55,8 +61,8 @@ def test_a_location_with_nothing_to_decode_yields_empty(location):
     assert C.decode_cloud_location(location) == ""
 
 
-def test_our_own_playback_wrapping_round_trips():
-    wrapped = C.playback_location("http://192.0.2.10:8000", "https://radio.example.com/s", "S")
+def test_our_own_orion_wrapping_round_trips():
+    wrapped = C.orion_location("http://192.0.2.10:8000", "https://radio.example.com/s", "S")
     assert C.stream_url_from_location(wrapped) == "https://radio.example.com/s"
 
 
@@ -87,6 +93,49 @@ def test_harvest_leaves_a_hole_rather_than_dropping_a_station_it_cannot_resolve(
     entries = C.harvest_presets(PREMIGRATION)
     assert entries[1]["location"] == ""
     assert entries[1]["name"] == "Catalogue Station"
+
+
+@pytest.mark.parametrize(("button", "source", "ctype", "location"), [
+    (3, "SPOTIFY", "tracklisturl", "/playback/container/c3BvdGlmeTphbGJ1bTox"),
+    (4, "STORED_MUSIC", "album", "1$4$5"),
+])
+def test_harvest_keeps_a_non_radio_preset_exactly_as_it_was(button, source, ctype, location):
+    """Flattening these to LOCAL_INTERNET_RADIO turned an album into a named radio hole."""
+    entry = next(e for e in C.harvest_presets(PREMIGRATION) if e["buttonNumber"] == button)
+    assert entry["keep"] is True
+    assert (entry["source"], entry["contentItemType"], entry["location"]) == (source, ctype, location)
+
+
+def test_harvest_does_not_mark_a_radio_preset_as_kept():
+    """A TUNEIN hole is radio to research, not something to leave alone."""
+    entries = C.harvest_presets(PREMIGRATION)
+    assert "keep" not in entries[0] and "keep" not in entries[1]
+
+
+def test_harvest_reports_kept_presets_as_resolved_not_as_holes(tmp_path, capsys):
+    backup = tmp_path / "presets.xml"
+    backup.write_text(PREMIGRATION, encoding="utf-8")
+    P.main(["harvest", "--backup", str(backup), "--out", str(tmp_path / "t.json")])
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert data["needs_research"] == ["Catalogue Station"]
+    assert data["kept"] == ["An Album", "Library Album"]
+
+
+def test_harvest_unescapes_what_the_speaker_escaped():
+    """The speaker returns XML: a name or a bare URL holding & arrives as &amp;. Kept literally,
+    `restore` escapes it again and the button is named "Rock &amp; Roll" for good."""
+    raw = ('<presets><preset id="1"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
+           'location="https://radio.example.com/s?a=1&amp;b=2" sourceAccount="">'
+           "<itemName>Rock &amp; Roll &lt;FM&gt;</itemName></ContentItem></preset></presets>")
+    entry = C.harvest_presets(raw)[0]
+    assert (entry["name"], entry["location"]) == ("Rock & Roll <FM>", "https://radio.example.com/s?a=1&b=2")
+
+
+def test_a_bare_url_with_an_escaped_ampersand_still_compares_equal():
+    raw = ('<presets><preset id="1"><ContentItem source="LOCAL_INTERNET_RADIO" '
+           'location="https://radio.example.com/s?a=1&amp;b=2" /></preset></presets>')
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://radio.example.com/s?a=1&b=2"}]
+    assert C.slots_to_write(raw, wanted) == []
 
 
 def test_preset_name_reads_the_button_it_was_asked_for():
@@ -220,7 +269,7 @@ def test_harvest_writes_a_template_and_reports_what_still_needs_research(tmp_pat
     assert rc == 1
     assert body["data"]["unresolved"] == 1
     assert body["data"]["needs_research"] == ["Catalogue Station"]
-    assert len(json.loads(out.read_text(encoding="utf-8"))["presets"]) == 2
+    assert len(json.loads(out.read_text(encoding="utf-8"))["presets"]) == 4
 
 
 def test_harvest_of_a_fully_resolvable_backup_exits_zero(tmp_path, capsys):

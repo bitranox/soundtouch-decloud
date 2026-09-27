@@ -24,16 +24,23 @@ import urllib.error
 import urllib.request
 
 try:
-    from soundtouch_core import (API_PORT, SpeakerError, classify_stream, harvest_presets,
-                                 http_get, parse_sources, playback_location, playlist_targets,
-                                 slots_to_write)
+    from soundtouch_core import (API_PORT, ORION_PATH, PLAYBACK_PATH, SpeakerError,
+                                 classify_stream, harvest_presets, http_get, orion_location,
+                                 parse_sources, playlist_targets, slots_to_write)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from soundtouch_core import (API_PORT, SpeakerError, classify_stream, harvest_presets,
-                                 http_get, parse_sources, playback_location, playlist_targets,
-                                 slots_to_write)
+    from soundtouch_core import (API_PORT, ORION_PATH, PLAYBACK_PATH, SpeakerError,
+                                 classify_stream, harvest_presets, http_get, orion_location,
+                                 parse_sources, playlist_targets, slots_to_write)
 
 REQUIRED_FIELDS = ("buttonNumber", "name", "location")
+# A kept entry (an album, a library track) is not a stream, so fetching it proves nothing. It is
+# reported as what it is instead of being counted as unplayable, which would fail every validate.
+KEPT_VERDICT = {"verdict": "kept", "playable": True, "note": "not radio; left as it is"}
+# Since AfterTouch v0.137.0 a preset written to one speaker is passed on to the other speakers of
+# its account, so a restore is never as local as the one --ip it names.
+SHARING_NOTE = ("AfterTouch shares a stored preset with the other speakers of the same account "
+                "(v0.137.0 and later), so this write can reach them too.")
 
 __all__ = ["build_parser", "load_template", "load_partial_template", "radio_ready",
            "preset_xml", "stream_verdict", "main"]
@@ -60,7 +67,9 @@ def load_template(path: str) -> dict[str, object]:
         if button in seen:
             raise ValueError(f"buttonNumber {button} appears twice")
         seen.add(button)
-        if "/custom/v1/playback/" in entry["location"]:
+        if entry.get("keep"):
+            continue  # not radio: carried as stored, never written, so there is no stream to demand
+        if any(path in entry["location"] for path in (PLAYBACK_PATH, ORION_PATH)):
             raise ValueError("location must be the PLAIN stream URL; the wrapping is added on write")
         if not str(entry["location"]).startswith(("http://", "https://")):
             raise ValueError(
@@ -96,8 +105,8 @@ def radio_ready(ip: str) -> bool:
 
 
 def preset_xml(service: str, entry: dict[str, object]) -> str:
-    """The body for one preset slot, with the location wrapped for the playback adapter."""
-    location = playback_location(service, str(entry["location"]), str(entry["name"]))
+    """The body for one preset slot, with the location wrapped the way AfterTouch's player does."""
+    location = orion_location(service, str(entry["location"]), str(entry["name"]))
     name = str(entry["name"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (f'<ContentItem source="{entry.get("source", "LOCAL_INTERNET_RADIO")}" '
             f'type="{entry.get("contentItemType", "stationurl")}" '
@@ -197,13 +206,14 @@ def main(argv: list[str] | None = None) -> int:
         entries = harvest_presets(raw)
         holes = [e for e in entries if not e["location"]]
         template = {"deviceId": args.device_id, "name": args.name, "presets": entries}
-        body = json.dumps(template, indent=2)
+        body = json.dumps(template, indent=2, ensure_ascii=False)
         if args.out:
             pathlib.Path(args.out).write_text(body + "\n", encoding="utf-8")
         else:
             print(body)
         return emit(not holes, {"presets": len(entries), "unresolved": len(holes),
                                 "needs_research": [e["name"] for e in holes],
+                                "kept": [e["name"] for e in entries if e.get("keep")],
                                 "out": args.out or "(stdout)"})
 
     if args.cmd == "validate":
@@ -212,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             return emit(False, {"error": str(exc)}, code=2)
         checked = [{"buttonNumber": e.get("buttonNumber"), "name": e.get("name"),
-                    **stream_verdict(str(e.get("location", "")))}
+                    **(KEPT_VERDICT if e.get("keep") else stream_verdict(str(e.get("location", ""))))}
                    for e in template["presets"]]  # type: ignore[union-attr]
         bad = [c for c in checked if not c["playable"]]
         return emit(not bad, {"checked": len(checked), "unplayable": len(bad), "results": checked})
@@ -260,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
         return emit(False, {"would_write": len(todo),
                             "missing_streams": [p["location"] for p in todo],
                             "buttons": [p["buttonNumber"] for p in todo],
-                            "note": "re-run with --confirm to write these"})
+                            "note": "re-run with --confirm to write these",
+                            "sharing": SHARING_NOTE})
     wrote = []
     for entry in sorted(todo, key=lambda p: p["buttonNumber"]):
         try:
@@ -270,7 +281,8 @@ def main(argv: list[str] | None = None) -> int:
             return emit(False, {"wrote": wrote, "error": f"{entry['name']}: {exc}"}, code=2)
         time.sleep(0.5)
     after = slots_to_write(http_get(f"http://{args.ip}:{API_PORT}/presets"), presets)  # type: ignore[arg-type]
-    return emit(not after, {"wrote": wrote, "still_missing": [p["location"] for p in after]})
+    return emit(not after, {"wrote": wrote, "still_missing": [p["location"] for p in after],
+                            "sharing": SHARING_NOTE})
 
 
 if __name__ == "__main__":

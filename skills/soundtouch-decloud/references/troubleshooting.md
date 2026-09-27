@@ -11,8 +11,8 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 | One speaker missing, others found                                  | Asleep, on a guest network, or on a different subnet                                                                                                                                                                                           |
 | `/sources` lists no radio source                                   | `bmxRegistryUrl` still points at the dead cloud                                                                                                                                                                                                |
 | All four URLs local, still no radio source                         | No account bound; check `margeAccountUUID`                                                                                                                                                                                                     |
-| Presets accepted, gone after every reboot                          | The boot wipe. Try a per-speaker account id before automating around it                                                                                                                                                                        |
-| Preset selected, nothing plays, gives up after ~20 s               | The location is a raw stream URL, not the playback adapter                                                                                                                                                                                     |
+| Presets accepted, gone after every reboot                          | The boot wipe. Try a per-speaker account id, then the player's "Keep ours" or "Refresh sources on speaker"; see references/presets.md                                                                                                          |
+| Preset selected, nothing plays, gives up after ~20 s               | The location is a raw stream URL, not the Orion station adapter                                                                                                                                                                                |
 | Buffering, then gives up after ~20 s                               | Format is right. Either the audio never arrived, or upstream issue #604                                                                                                                                                                        |
 | Everything worked, then all speakers broke at once                 | The service's address changed                                                                                                                                                                                                                  |
 | Values written, all replied OK, gone after reboot                  | `envswitch` was written before the `sys configuration` writes                                                                                                                                                                                  |
@@ -114,8 +114,8 @@ interface you are about to use, not for a different port to answer first.
 before concluding a port is genuinely closed rather than slow. Most "it did not work" reports are a
 check made thirty seconds after a reboot.
 
-Presets returning after a power cut depends entirely on how often your restore runs, so it is a
-property of your own schedule and not of the speaker.
+Presets returning after a power cut depends on the speaker fetching them from the service once
+it is up, so give it the same two minutes, then run `check` rather than assuming either way.
 
 ## Still stuck: read the upstream documentation
 

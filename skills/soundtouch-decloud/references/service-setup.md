@@ -74,7 +74,6 @@ services:
       HTTPS_PORT: 8443
       DATA_DIR: /app/data
       SERVER_URL: http://192.0.2.10:8000
-      HTTPS_SERVER_URL: https://192.0.2.10:8443
       MGMT_USERNAME: admin
       MGMT_PASSWORD: change_me!
       RECORD_INTERACTIONS: "true"
@@ -87,6 +86,16 @@ services:
 configuration, so if it ever changes, re-render this file and migrate the speakers again. That is
 the reason phase 2 pins it. It is also why a speaker cannot simply be told a new address from the
 service's own settings: a speaker only learns one at migrate time.
+
+There is no `HTTPS_SERVER_URL` in it on purpose: the service derives the HTTPS address from
+`SERVER_URL` (same host, `https`, on `HTTPS_PORT`), so setting it only adds a second copy of the
+address to keep in step.
+
+**Settings saved in the admin UI beat this file.** The service keeps them in `settings.json` in
+its data directory and gives them precedence over environment variables. So if the address in
+the UI's Settings was ever saved, re-rendering the compose file with a new `SERVER_URL` changes
+nothing: change it in Settings too, or check `settings.json`, before concluding the new address
+did not take.
 
 **Which networking mode depends on the operating system, and getting it wrong is the commonest way
 this setup disappoints.** Automatic discovery is SSDP and mDNS, which are multicast, and Docker's
@@ -102,8 +111,14 @@ What it cannot do is find the speakers on its own, so they are added by address 
 
 ```bash
 uv run scripts/soundtouch_service.py render --host <service-host> --network ports --out docker-compose.yml
-curl -X POST "http://<service-host>:8000/api/setup/devices"   # add a speaker by IP
+# add a speaker by IP, once per speaker
+curl -X POST "http://<service-host>:8000/api/setup/devices" \
+     -H 'Content-Type: application/json' -d '{"ip":"<speaker-ip>"}'
 ```
+
+The address goes in a JSON body; without one the call answers 400. The service contacts the
+speaker right away to read what it is, so a speaker that is off or unreachable answers 502 rather
+than being added blind. The admin UI's "add by IP" field does the same call.
 
 **Never mix the two.** A `ports:` block alongside `network_mode: host` is invalid, Docker only
 warns, and the leftover block reads as though it applies.
@@ -113,8 +128,9 @@ call back to. Pointing it at loopback tells every speaker to call itself. The si
 running AfterTouch on the speaker itself, where they really are the same machine.
 
 **Change `MGMT_PASSWORD`.** The default that ships is published in upstream's own documentation, so
-leaving it means anyone who can reach the machine can drive the Management API. `render` warns when
-it is left alone; `--mgmt-password` sets it.
+leaving it means anyone who can reach the machine can drive the Management API (`/api/mgmt/*`,
+which always asks for these credentials), and the admin area gate described below cannot be
+switched on at all. `render` warns when it is left alone; `--mgmt-password` sets it.
 
 **Pinning a version: the image tag carries no `v`.** Releases and git tags are `v0.122.1`; the image
 on ghcr is `0.122.1`. A pin to `v0.122.1` cannot be resolved, and because the running container is
@@ -144,8 +160,12 @@ The admin interface is at `http://<service-host>:8000/admin`, and its health tab
 to look when something is wrong later, not the last. It does not only report: its QuickFixes act,
 including one that pushes the service's stored presets back onto a speaker without a reboot.
 
-If the owner sets a Management API password, note that the `/api/setup/*` calls in this skill sit
-behind it and will start answering 401 without explaining why.
+The `/api/setup/*` calls in this skill are open by default, whatever `MGMT_PASSWORD` is set to.
+They sit behind the Management API login only when the admin area gate is switched on: Settings
+(`admin_area_auth` set to `enabled`). The service refuses to switch it on while the credentials are
+still the published default (`admin` / `change_me!`), so change `MGMT_USERNAME` and
+`MGMT_PASSWORD` first. Once it is on, every call here needs `-u <user>:<password>`, and without it
+answers 401 without explaining why.
 
 ## Phase 5: finding the speakers
 

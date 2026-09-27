@@ -47,18 +47,40 @@ def test_a_button_outside_one_to_six_is_refused(tmp_path, button):
         P.load_template(_write(tmp_path, bad))
 
 
-def test_an_already_wrapped_location_is_refused(tmp_path):
+@pytest.mark.parametrize("wrapped", [
+    "http://192.0.2.10:8000/custom/v1/playback/abc?name=x",
+    "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=abc",
+])
+def test_an_already_wrapped_location_is_refused(tmp_path, wrapped):
     """The script adds the adapter wrapping, so a pre-wrapped location would be double-wrapped."""
     bad = json.loads(json.dumps(GOOD))
-    bad["presets"][0]["location"] = "http://192.0.2.10:8000/custom/v1/playback/abc?name=x"
+    bad["presets"][0]["location"] = wrapped
     with pytest.raises(ValueError, match="PLAIN stream URL"):
         P.load_template(_write(tmp_path, bad))
 
 
-def test_preset_xml_wraps_the_location_for_the_adapter():
-    """A raw stream URL here is accepted by the speaker and never plays."""
+KEPT = {"buttonNumber": 2, "name": "An Album", "location": "/playback/container/c3BvdGlmeTphbGJ1bTox",
+        "contentItemType": "tracklisturl", "source": "SPOTIFY", "keep": True}
+
+
+def test_a_kept_entry_loads_without_a_stream_url(tmp_path):
+    """A Spotify or library preset is not radio; demanding an http stream for it is the bug."""
+    data = dict(GOOD, presets=[GOOD["presets"][0], KEPT])
+    assert len(P.load_template(_write(tmp_path, data))["presets"]) == 2
+
+
+def test_validate_reports_a_kept_entry_as_kept_not_unplayable(tmp_path, capsys):
+    """Nothing is fetched for it: an album location is not a URL, and fetching it would read dead."""
+    assert P.main(["validate", "--template", _write(tmp_path, dict(GOOD, presets=[KEPT]))]) == 0
+    result = json.loads(capsys.readouterr().out)["data"]["results"][0]
+    assert (result["verdict"], result["name"]) == ("kept", "An Album")
+
+
+def test_preset_xml_wraps_the_location_as_the_player_does():
+    """A raw stream URL here is accepted by the speaker and never plays. The wrapping is the
+    Orion form AfterTouch's own player and CLI write, so there is one format on the account."""
     xml = P.preset_xml("http://192.0.2.10:8000", GOOD["presets"][0])
-    assert "/custom/v1/playback/" in xml
+    assert 'location="http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=' in xml
     assert 'location="https://radio.example.com/stream"' not in xml
 
 

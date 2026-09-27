@@ -12,6 +12,7 @@ writes have an order in which the persisting command must come last.
 from __future__ import annotations
 
 import base64
+import html
 import json
 import socket
 import time
@@ -33,7 +34,15 @@ CLOCK_TOLERANCE_S = 86400
 URL_FIELDS = ("margeServerUrl", "statsServerUrl", "swUpdateUrl", "bmxRegistryUrl")
 CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
 RADIO_SOURCES = ("TUNEIN", "LOCAL_INTERNET_RADIO", "RADIO_BROWSER")
+# The form this skill wrote before 1.8.0. Still READ, because speakers keep what was stored, and
+# some of AfterTouch's own playback paths still produce it; never written any more.
 PLAYBACK_PATH = "/custom/v1/playback/"
+# The form AfterTouch's player and CLI write, and so the one its catalogue, its stored-vs-reported
+# comparison and its sharing between speakers all see. Writing anything else is a second format.
+ORION_PATH = "/core02/svc-bmx-adapter-orion/prod/orion/station"
+# What Go's json.Marshal escapes on top of JSON itself (its HTML-safe default).
+_GO_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026",
+                    "\u2028": "\\u2028", "\u2029": "\\u2029"}
 # Served for .m3u and .pls. They are TEXT that lists streams, so a bare `audio/` test passes them
 # and the resulting preset is accepted at write time and never plays.
 PLAYLIST_TYPES = ("audio/x-mpegurl", "audio/mpegurl", "application/x-mpegurl",
@@ -46,8 +55,10 @@ SSH_INJECT = ";touch /tmp/remote_services;/etc/init.d/sshd start"
 
 __all__ = [
     "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
-    "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "playback_location", "decode_playback_location", "slots_to_write",
-    "missing_streams", "parse_presets", "parse_preset_slots", "port_open", "telnet_run", "http_get",
+    "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "orion_location", "ORION_PATH",
+    "PLAYBACK_PATH", "decode_playback_location", "slots_to_write", "missing_streams",
+    "parse_presets", "parse_preset_slots", "parse_preset_items", "port_open", "telnet_run",
+    "http_get",
     "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
     "preset_name", "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
     "http_date_header", "clock_state", "CLOCK_TOLERANCE_S",
@@ -167,21 +178,29 @@ def build_enable_ssh_commands(service: str, *, full_config: bool = False) -> lis
     ]
 
 
-def playback_location(service: str, stream_url: str, name: str) -> str:
+def orion_location(service: str, stream_url: str, name: str, *, image_url: str = "") -> str:
     """Wrap a stream URL as a preset location the speaker can actually follow.
 
     A LOCAL_INTERNET_RADIO location is FOLLOWED by the speaker, which expects a station document
     describing the stream. Given the stream URL itself the speaker receives audio where it expected
-    a document, holds the source about twenty seconds and discards it without ever buffering. The
-    encoding is URL-safe base64 WITH padding.
+    a document, holds the source about twenty seconds and discards it without ever buffering.
+
+    Mirrors `BuildOrionLocation` in upstream's pkg/service/bmx/bmx.go (checked against v0.137.1)
+    byte for byte: the JSON carries Go's field order and its escaping of < > & U+2028 U+2029, the
+    base64 is the standard alphabet with padding, and the query escaping matches url.QueryEscape.
+    A copy can drift, so `check` reads the stream back out of the `data` blob rather than comparing
+    strings: a format change upstream shows up there as an alarm, not as silent rewrites.
     """
-    encoded = base64.urlsafe_b64encode(stream_url.encode("utf-8")).decode("ascii")
-    return (f"{service.rstrip('/')}{PLAYBACK_PATH}{encoded}"
-            f"?name={urllib.parse.quote(name)}")
+    payload = json.dumps({"name": name, "imageUrl": image_url, "streamUrl": stream_url},
+                         separators=(",", ":"), ensure_ascii=False)
+    for char, escaped in _GO_JSON_ESCAPES.items():
+        payload = payload.replace(char, escaped)
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return f"{service.rstrip('/')}{ORION_PATH}?data={urllib.parse.quote_plus(encoded, safe='')}"
 
 
 def decode_playback_location(location: str) -> str:
-    """Recover the stream URL a stored location wraps, or "" if it is not one of ours."""
+    """Recover the stream URL a legacy /custom/v1/playback location wraps, or "" if it is not one."""
     if PLAYBACK_PATH not in location:
         return ""
     encoded = location.split(PLAYBACK_PATH, 1)[1].split("?", 1)[0]
@@ -238,13 +257,22 @@ def harvest_presets(raw: str) -> list[dict[str, object]]:
     An entry whose `location` is empty could not be resolved to a stream and is NOT a usable
     preset: it is a name to look up. Emitting it rather than dropping it is deliberate, so the
     button and the station name survive into whatever replaces it.
+
+    Only radio is turned into a stream entry. A Spotify album or a media-server track is carried
+    over exactly as stored and marked `keep`: this skill does not manage it, and rewriting it as
+    LOCAL_INTERNET_RADIO would turn the owner's album into a radio station without saying so.
     """
     out: list[dict[str, object]] = []
-    for button, location in sorted(parse_preset_slots(raw).items()):
+    for button, item in sorted(parse_preset_items(raw).items()):
+        name = preset_name(raw, button) or f"preset {button}"
+        if item["source"] and item["source"] not in RADIO_SOURCES:
+            out.append({"buttonNumber": button, "name": name, "location": item["location"],
+                        "contentItemType": item["type"], "source": item["source"], "keep": True})
+            continue
         out.append({
             "buttonNumber": button,
-            "name": preset_name(raw, button) or f"preset {button}",
-            "location": stream_url_from_location(location),
+            "name": name,
+            "location": stream_url_from_location(item["location"]),
             "contentItemType": "stationurl",
             "source": "LOCAL_INTERNET_RADIO",
         })
@@ -257,7 +285,9 @@ def preset_name(raw: str, button: int) -> str:
         if f'id="{button}"' not in chunk.split(">", 1)[0]:
             continue
         if "<itemName>" in chunk:
-            return chunk.split("<itemName>", 1)[1].split("</itemName>", 1)[0].strip()
+            # Unescaped here because preset_xml escapes on the way back out; kept escaped, a
+            # "Rock &amp; Roll" becomes "Rock &amp;amp; Roll" on the button after one restore.
+            return html.unescape(chunk.split("<itemName>", 1)[1].split("</itemName>", 1)[0].strip())
     return ""
 
 
@@ -303,14 +333,25 @@ def parse_presets(raw: str) -> list[str]:
     return out
 
 
-def parse_preset_slots(raw: str) -> dict[int, str]:
-    """Which BUTTON currently holds which location.
+def _attr(tag: str, name: str) -> str:
+    """One attribute's value from an opening tag, unescaped, or "" when the tag does not carry it.
+
+    Unescaped because the speaker answers in XML: a URL holding `&` arrives as `&amp;`, and kept
+    that way it never equals the plain URL it stands for.
+    """
+    marker = f' {name}="'
+    return html.unescape(tag.split(marker, 1)[1].split('"', 1)[0]) if marker in tag else ""
+
+
+def parse_preset_items(raw: str) -> dict[int, dict[str, str]]:
+    """Which BUTTON holds what: its location, and the source and type that say what KIND it is.
 
     The speaker returns `<preset id="N">` wrapping each ContentItem, so the button number is on the
     outer tag. Reading only the locations loses it, and then a station sitting on the wrong button
-    cannot be told apart from one that is correct.
+    cannot be told apart from one that is correct. The source is what separates a radio station
+    from an album, so dropping it flattens every preset into radio.
     """
-    slots: dict[int, str] = {}
+    items: dict[int, dict[str, str]] = {}
     for chunk in raw.split("<preset ")[1:]:
         if 'id="' not in chunk or 'location="' not in chunk:
             continue
@@ -318,26 +359,38 @@ def parse_preset_slots(raw: str) -> dict[int, str]:
             button = int(chunk.split('id="', 1)[1].split('"', 1)[0])
         except ValueError:
             continue
-        slots[button] = chunk.split('location="', 1)[1].split('"', 1)[0]
-    return slots
+        tag = " " + chunk.split("<ContentItem", 1)[-1].split(">", 1)[0]
+        items[button] = {"location": _attr(tag, "location"), "source": _attr(tag, "source"),
+                         "type": _attr(tag, "type")}
+    return items
 
 
-def slots_to_write(raw: str, wanted: list[dict[str, str]]) -> list[dict[str, str]]:
+def parse_preset_slots(raw: str) -> dict[int, str]:
+    """Which BUTTON currently holds which location."""
+    return {button: item["location"] for button, item in parse_preset_items(raw).items()}
+
+
+def slots_to_write(raw: str, wanted: list[dict[str, object]]) -> list[dict[str, object]]:
     """The template entries whose BUTTON does not already hold their stream.
 
     Two readings this rules out. Counting says six presets are present when one of them now points
     at a station the owner replaced. And comparing streams alone says nothing is missing when the
     right station sits on the wrong button, so a corrected template would never be applied - the
     button is part of what the owner asked for, not incidental.
+
+    A slot is compared by the STREAM it stands for, whatever form stores it: the Orion form the
+    player and this skill write, the older /custom/v1/playback form, or a bare URL. Comparing the
+    location string, or decoding only one form, calls a correct slot missing forever, and a restore
+    then rewrites the owner's button on every run. Entries marked `keep` are never written.
     """
     slots = parse_preset_slots(raw)
-    return [p for p in wanted
-            if decode_playback_location(slots.get(int(p["buttonNumber"]), "")) != p["location"]]
+    return [p for p in wanted if not p.get("keep")
+            and stream_url_from_location(slots.get(int(str(p["buttonNumber"])), "")) != p["location"]]
 
 
-def missing_streams(raw: str, wanted: list[dict[str, str]]) -> list[str]:
+def missing_streams(raw: str, wanted: list[dict[str, object]]) -> list[str]:
     """Just the stream URLs from slots_to_write, for reporting."""
-    return [p["location"] for p in slots_to_write(raw, wanted)]
+    return [str(p["location"]) for p in slots_to_write(raw, wanted)]
 
 
 def port_open(ip: str, port: int, timeout: float = 3.0) -> bool:

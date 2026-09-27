@@ -2,12 +2,12 @@
 
 ## A speaker carries FOUR service URLs, not one
 
-| Field            | What it does                              | Value after migration                                |
-|------------------|-------------------------------------------|------------------------------------------------------|
-| `margeServerUrl` | Account, presets, device registration     | `http://<service-host>:8000`                         |
-| `bmxRegistryUrl` | The list of source TYPES, so: radio        | `http://<service-host>:8000/bmx/registry/v1/services` |
-| `statsServerUrl` | Telemetry                                 | `http://<service-host>:8000`                         |
-| `swUpdateUrl`    | Software update                           | `http://<service-host>:8000/updates/soundtouch`      |
+| Field            | What it does                          | Value after migration                                 |
+|------------------|---------------------------------------|-------------------------------------------------------|
+| `margeServerUrl` | Account, presets, device registration | `http://<service-host>:8000`                          |
+| `bmxRegistryUrl` | The list of source TYPES, so: radio   | `http://<service-host>:8000/bmx/registry/v1/services` |
+| `statsServerUrl` | Telemetry                             | `http://<service-host>:8000`                          |
+| `swUpdateUrl`    | Software update                       | `http://<service-host>:8000/updates/soundtouch`       |
 
 Rewriting only the account URL is the single most common mistake, and it produces a speaker that
 looks migrated: it registers, it syncs presets, and it plays nothing at all. Radio source types
@@ -64,12 +64,12 @@ any `;` in a value, which means an injection was never cleaned up.
 
 ## Reboot, then wait
 
-| Way                                                        | Needs       |
-|------------------------------------------------------------|-------------|
+| Way                                                               | Needs       |
+|-------------------------------------------------------------------|-------------|
 | `uv run scripts/soundtouch_onboard.py --ip <ip> reboot --confirm` | telnet only |
-| `POST /api/setup/reboot/<deviceId>?method=telnet`           | telnet only |
-| `POST /api/setup/reboot/<deviceId>`                         | SSH open    |
-| Unplug it                                                   | nothing     |
+| `POST /api/setup/reboot/<deviceId>?method=telnet`                 | telnet only |
+| `POST /api/setup/reboot/<deviceId>`                               | SSH open    |
+| Unplug it                                                         | nothing     |
 
 **The HTTP endpoint takes a method, and defaults to SSH.** Called bare on a speaker without SSH it
 answers 500 without saying why, which reads as a broken service. Adding `?method=telnet` makes it
@@ -81,12 +81,12 @@ A wait that only checks for "back up" reports success instantly when the reboot 
 
 Timings to tell the owner:
 
-| After a reboot | What happens              |
-|----------------|---------------------------|
+| After a reboot | What happens                     |
+|----------------|----------------------------------|
 | about 2 s      | the speaker asks for its account |
-| about 70 s     | the web API answers again |
-| about 73 s     | account sync completes    |
-| about 80 s     | radio sources are ready   |
+| about 70 s     | the web API answers again        |
+| about 73 s     | account sync completes           |
+| about 80 s     | radio sources are ready          |
 
 Do not declare failure before roughly 80 seconds.
 
@@ -121,10 +121,20 @@ the service and reachable from it, but it does NOT need to be pointing at the se
 why pairing works before migration, and why it fails with a 404 when the service has never seen the
 device: add it by address first.
 
-The account id is a QUERY parameter; in the body it returns 400. It does NOT have to be seven
-digits. Seven digits is what the service GENERATES, so that is what most accounts look like, but the
-endpoint accepts any path-safe identifier - which matters because a speaker can arrive carrying
-something else entirely, and a seven-digit rule would reject it and drop the device.
+```bash
+curl -X POST "http://<service-host>:8000/api/setup/devices" \
+     -H 'Content-Type: application/json' -d '{"ip":"<speaker-ip>"}'
+```
+
+The address goes in a JSON body; without one the call answers 400. The service reads the speaker
+straight away, so an unreachable speaker answers 502 instead of being added.
+
+The account id is a QUERY parameter. The body of this call is never read, so an id sent there is
+simply absent, and the 400 that comes back is for the missing `account_id` parameter. It does NOT
+have to be seven digits. Seven digits is what the service GENERATES, so that is what most accounts
+look like, but the endpoint accepts any path-safe identifier - which matters because a speaker can
+arrive carrying something else entirely, and a seven-digit rule would reject it and drop the
+device.
 
 Prefer this endpoint over the speaker's own `setMargeAccount`: on newer firmware that returns 404,
 on some units the handler wedges, and it returns 502 when the speaker never had an account. The

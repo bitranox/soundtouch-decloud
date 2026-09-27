@@ -37,13 +37,21 @@ uv run scripts/soundtouch_presets.py harvest --backup <presets.xml> --out <speak
 Two sources for that XML, and only the first is yours to rely on:
 
 - whatever `backup` saved before the migration. This is the one that matters: nothing else
-  captures presets on the migration path this skill uses.
-- `<data-dir>/accounts/<account>/devices/<serial>/Presets.xml`, IF a "Sync" was run for that
-  speaker while its presets were still intact. A Sync writes that file; a migration does not.
-  `<data-dir>` is the host path mounted as the service's data volume, so it is whatever the
-  compose file says (`service-setup.md`). Do not count on it: with `method=telnet` - what
-  `migration.md` tells you to use - the service takes the SSH-free path and skips its
-  off-device backup step entirely.
+  captures the pre-migration presets on the path this skill uses. The service does NOT write a
+  preset backup when a speaker migrates. The only copies it takes then are
+  `SoundTouchSdkPrivateCfg.xml` and `/etc/hosts`, over SSH, as `.bak` files under
+  `accounts/<account>/devices/<id>/`, and with `method=telnet` - what `migration.md` tells you
+  to use - not even those.
+- `<data-dir>/accounts/<account>/devices/<id>/Presets.xml`, the service's own stored list for
+  that speaker. It is written every time a preset is saved, by the speaker, the player, the CLI or
+  a Sync, and when a preset is shared from another speaker of the account. So it holds the
+  speaker's presets as the SERVICE last saw them, which after a migration is the new list, not
+  the pre-shutdown one. `<data-dir>` is the host path mounted as the service's data volume, so it
+  is whatever the compose file says (`service-setup.md`).
+
+A station that got replaced is not lost on the service either: AfterTouch keeps every preset it
+has stored, and everything that has played, in its preset catalog (`catalog.json` in the data
+directory, 100 entries by default), and the player's preset editor offers them to pick again.
 
 A preset stored while the Bose cloud was alive points at the Orion station adapter and carries the
 real stream inside its `data` parameter, base64url JSON with a `streamUrl` key. So the owner's own
@@ -51,6 +59,11 @@ old presets usually already CONTAIN the direct stream and there is nothing to se
 that came from a CATALOGUE source instead, TuneIn and its kind, holds a station id and no stream at
 all. `harvest` leaves those as an empty `location` and names them in `needs_research`, keeping the
 button and the station name for whatever replaces them.
+
+A preset that is not radio at all - a Spotify album, a track from a media server - is carried over
+exactly as stored and marked `"keep": true`, and `harvest` names it under `kept`. The skill does
+not manage those: `validate` reports them as `kept` without fetching anything, and `check` and
+`restore` never touch their buttons.
 
 A template with an empty `location` cannot be written to a speaker: `check` and `restore` refuse
 the file and name the button. That is deliberate. A half-researched template is not a set of
@@ -112,21 +125,30 @@ location and expects a station document describing the stream. Give it the strea
 receives audio where it expected a document, holds the source about twenty seconds, and discards it
 without ever buffering.
 
-The service provides the document at its playback adapter:
+The service provides the document at its Orion station adapter, the same form AfterTouch's own
+player and `soundtouch-cli preset store` write:
 
 ```
-http://<service-host>:8000/custom/v1/playback/<base64url-of-stream-url>?name=<name>
+http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=<blob>
 ```
 
-The encoding is URL-safe base64 WITH padding.
+`<blob>` is standard base64 (with padding, then query-escaped) of the JSON
+`{"name":...,"imageUrl":...,"streamUrl":...}`. The script builds it byte for byte the way upstream
+does (`BuildOrionLocation` in `pkg/service/bmx/bmx.go`), so the player's catalog, its
+stored-versus-reported comparison and its sharing between speakers all see one format.
 
 Right:
 
 ```xml
 <ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl"
-             location="http://<service-host>:8000/custom/v1/playback/aHR0cHM6Ly8...?name=Example%20Radio"
+             location="http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=eyJuYW1lIjoi..."
              sourceAccount="" isPresetable="true"><itemName>Example Radio</itemName></ContentItem>
 ```
+
+An older form, `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`, plays too.
+Versions of this skill before 1.8.0 wrote it, and some of the service's own playback paths still
+produce it, so a preset saved from whatever is playing can carry either. `check` reads both, and a
+bare stream URL, by the stream they stand for rather than by the string.
 
 Wrong, and accepted at write time:
 
@@ -174,11 +196,12 @@ and it does not corrupt the canonical copy.
 
 It is **not fully root-caused** upstream, and what it correlates with is the speaker being one of
 several devices under the SAME account. A setup with a distinct account id per speaker has not
-reproduced it. If one speaker in a multi-speaker home keeps losing presets, try that before building
-any of the automation below.
+reproduced it. If one speaker in a multi-speaker home keeps losing presets, try that before
+anything else below.
 
-The treatment is a canonical copy kept off the speaker, rewritten after the source has mounted. One
-JSON file per speaker, named by device id:
+The skill's own safety net is a snapshot kept off the speaker AND off the service, written back by
+hand after the source has mounted when nothing better applies. One JSON file per speaker, named by
+device id:
 
 ```json
 {
@@ -196,21 +219,27 @@ JSON file per speaker, named by device id:
 }
 ```
 
-The `location` here is the PLAIN stream URL. The script builds the playback-adapter wrapping when it
-writes, so the service moving to another address never means editing these files.
+The `location` here is the PLAIN stream URL. The script builds the Orion wrapping when it writes,
+so the service moving to another address never means editing these files. An entry with
+`"keep": true` is a non-radio preset `harvest` carried over; it is left alone.
 
 ```bash
 # reports, never writes
 uv run scripts/soundtouch_presets.py check --ip <speaker-ip> \
     --template <speaker>.json --service http://<service-host>:8000
 
-# writes the buttons that are wrong
+# writes the buttons that are wrong - run it by hand, once, when check says so
 uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> \
     --template <speaker>.json --service http://<service-host>:8000 --confirm
 ```
 
 `check` reports which BUTTONS are wrong, not just which streams are absent. The right station on
 the wrong button is still wrong, and comparing streams alone calls that correct.
+
+**A restore is not local to the one speaker it names.** Since AfterTouch v0.137.0, speakers on one
+account share their presets: a preset stored for one is passed on to the others (by default when
+they already hold the same presets, or hold none). `restore` says so in its output. Before running
+it on a home with several speakers, decide whether the template is right for all of them.
 
 ### Measure it before you automate
 
@@ -247,7 +276,8 @@ account id rather than one shared across the home, and open the admin Health tab
 `http://<service-host>:8000/admin`, whose QuickFix pushes the service's stored presets back onto a
 speaker without a reboot.
 
-An always-on restore loop is not free, and both costs are quiet:
+That is why this skill installs no restore on a timer. An always-on restore loop is not free, and
+all three costs are quiet:
 
 - **It overrules the owner.** `restore` rewrites any button whose stream does not match the
   template, so a station retuned ON THE SPEAKER is reverted at the next run, within two minutes.
@@ -255,49 +285,33 @@ An always-on restore loop is not free, and both costs are quiet:
 - **It hides the event you wanted to know about.** A loss that self-heals in two minutes is a loss
   nobody ever hears about, so nobody can tell whether the loop is still earning its place, or
   whether the service update three months ago fixed the wipe outright.
+- **It does not stay on one speaker.** Since AfterTouch v0.137.0 each write reaches the other
+  speakers of the account, so a loop repairing one box overrules the owner on all of them.
 
-If a measured week shows a real, repeating wipe, the schedule below is the fallback. Every two
-minutes is deliberate: it is a no-op when the presets are already correct, and it does nothing at
-all while the radio source is not mounted, because writing in that window is silently undone by the
-same wipe.
+### What to use instead of a repair loop
 
-| System              | How                                                                                                                                                                                        |
-|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Linux, Raspberry Pi | `crontab -e`, then one line per speaker: `*/2 * * * * cd /path/to/skill && uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> --template <file> --service <service> --confirm` |
-| Linux with systemd  | The unit pair below                                                                                                                                                                        |
-| Synology, QNAP      | The Task Scheduler in the web interface, a user-defined script every 2 minutes                                                                                                             |
-| Windows             | Task Scheduler, a basic task repeating every 2 minutes                                                                                                                                     |
-| macOS               | A launchd agent with `StartInterval` 120                                                                                                                                                   |
+The service keeps each speaker's presets itself and has the tools to reconcile them. In the order
+to reach for them:
 
-```ini
-# /etc/systemd/system/soundtouch-presets.service
-[Unit]
-Description=Restore Bose SoundTouch presets after a speaker boots
+1. **The service's stored copy and the speaker's own fetch.** AfterTouch stores each speaker's
+   presets, and a speaker fetches them from it when it is switched on or rebooted. That fetch is
+   also where the wipe above lands, so do not assume it heals: reboot once and `check`. When it
+   does not come back by itself, the next items push the stored list on demand.
+2. **The "AfterTouch and the speaker disagree" warning** in the player, above the preset tiles.
+   Where a button holds different things on the two sides it lists both: "Keep ours" puts what
+   the service stores onto the speaker, "Take the speaker's" stores what the speaker has. Either
+   way the other entry stays in the catalog, so the choice can be undone.
+3. **"Refresh sources on speaker"** in the player, or the admin Health tab's QuickFix at
+   `http://<service-host>:8000/admin`, to push the stored presets now instead of at the next fetch.
+4. **`setup sync --confirm`** (admin "Sync Data") imports a speaker's whole list into the service.
+   It refuses an import that would shrink what is stored unless confirmed, and it is never shared
+   to the other speakers.
+5. **This skill's snapshot and `restore`**, by hand, when all of the above disagree with what the
+   owner wants. The per-speaker template is the copy that lives OFF the service, so it survives a
+   lost data directory.
 
-[Service]
-Type=oneshot
-WorkingDirectory=/path/to/skill
-ExecStart=/usr/bin/uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> --template <file> --service <service> --confirm
-# exit 1 is "presets were short", which is the normal reason this unit exists
-SuccessExitStatus=1
-```
-
-```ini
-# /etc/systemd/system/soundtouch-presets.timer
-[Unit]
-Description=Restore Bose SoundTouch presets every two minutes
-
-[Timer]
-OnBootSec=3min
-OnUnitActiveSec=2min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Check afterwards that it is actually running, rather than assuming: wait for the next slot and look
-for a change, or run the `check` subcommand and confirm it reports nothing missing.
+The upstream guide describes the first four in full:
+https://gesellix.github.io/Bose-SoundTouch/docs/guides/PRESETS/
 
 ### Alert, do not auto-repair
 
@@ -342,8 +356,18 @@ against.
 one failure neither the speaker nor the service can report: a station can go off the air with
 everything locally correct. Weekly is enough.
 
-Tell the owner what to expect either way. With an alarm and no repair loop, presets that vanish
-STAY vanished until someone runs `restore`, and that is the point: they find out.
+Tell the owner what to expect. With an alarm and no repair loop, presets that vanish and do not
+come back at the speaker's next fetch STAY vanished until someone acts - "Keep ours" in the player,
+or a `restore` run - and that is the point: they find out.
+
+### After every AfterTouch update
+
+The Orion wrapping this skill writes is a copy of upstream's, so it can fall out of step. `check`
+reads the stream back out of whatever a slot holds instead of comparing strings, so a format
+change shows up as an alarm rather than as silent rewrites. After updating the service, save one
+preset from the player, then run `check` against a template that holds that station on that
+button. Exit 0 means the two still agree. Exit 1 on a slot you can hear playing means the format
+moved: stop using `restore` until this skill is updated.
 
 ## Acceptance: listen, do not count
 
@@ -354,9 +378,9 @@ Counting presets proves they were written, not that they play.
 3. Play a DIFFERENT preset and watch again. One working station does not prove the set works.
 4. Put the volume back.
 5. Reboot, wait three minutes, and check what the presets do on their own. This step MEASURES; it
-   does not presuppose an answer. Presets still there is the common result and means no repair
-   automation is needed. Presets gone is the wipe, and sends you to "Measure it before you
-   automate" rather than straight to a timer.
+   does not presuppose an answer. Presets still there is the common result and means nothing
+   more is needed. Presets gone is the wipe, and sends you to "Measure it before you automate"
+   and the service's own tools, not to a timer.
 
 When checking that a second preset played, require the station NAME to change. Waiting only for the
 playing state passes instantly when the speaker is already playing the previous preset, which proves

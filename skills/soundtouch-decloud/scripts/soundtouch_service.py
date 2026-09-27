@@ -103,6 +103,9 @@ def render_compose(host: str, version: str = "latest", data_dir: str = "/opt/sou
 
     The two modes are mutually exclusive: a `ports:` block alongside `network_mode: host` is
     invalid, Docker only warns, and the leftover block reads as though it applies.
+
+    HTTPS_SERVER_URL is left out on purpose: the service derives it from SERVER_URL (same host,
+    https, HTTPS_PORT), so setting it only adds a second copy of the address to keep in step.
     """
     if network not in ("host", "ports"):
         raise ValueError(f"network must be 'host' or 'ports', got {network!r}")
@@ -121,7 +124,6 @@ def render_compose(host: str, version: str = "latest", data_dir: str = "/opt/sou
       HTTPS_PORT: 8443
       DATA_DIR: /app/data
       SERVER_URL: http://{host}:8000
-      HTTPS_SERVER_URL: https://{host}:8443
       MGMT_USERNAME: admin
       MGMT_PASSWORD: {mgmt_password}
       RECORD_INTERACTIONS: "true"

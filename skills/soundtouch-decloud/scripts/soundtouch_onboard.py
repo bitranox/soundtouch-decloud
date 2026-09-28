@@ -100,13 +100,46 @@ def wait_port(ip: str, port: int, limit: float) -> float | None:
     return None
 
 
+def _post(ip: str, path: str, body: str) -> None:
+    req = urllib.request.Request(f"http://{ip}:{API_PORT}/{path}", data=body.encode(), method="POST")
+    with urllib.request.urlopen(req, timeout=15):  # noqa: S310 - fixed http URL built above
+        pass
+
+
 def _key(ip: str, name: str) -> None:
     for state in ("press", "release"):
-        body = f'<key state="{state}" sender="Gabbo">{name}</key>'.encode()
-        req = urllib.request.Request(f"http://{ip}:{API_PORT}/key", data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=15):  # noqa: S310 - fixed http URL built above
-            pass
+        _post(ip, "key", f'<key state="{state}" sender="Gabbo">{name}</key>')
         time.sleep(0.4)
+
+
+def _volume(ip: str) -> int | None:
+    """The speaker's current volume, or None if it could not be read."""
+    try:
+        raw = http_get(f"http://{ip}:{API_PORT}/volume")
+    except SpeakerError:
+        return None
+    value = raw.split("<actualvolume>", 1)[1].split("<", 1)[0] if "<actualvolume>" in raw else ""
+    return int(value) if value.isdigit() else None
+
+
+def _source(ip: str) -> str:
+    raw = http_get(f"http://{ip}:{API_PORT}/now_playing")
+    return raw.split('source="', 1)[1].split('"', 1)[0] if 'source="' in raw else ""
+
+
+def _wake(ip: str, limit: float = 20.0) -> None:
+    """Take a speaker out of standby before a preset is pressed.
+
+    A PRESET key pressed in standby only WAKES the speaker, onto whatever it played last, so a
+    play proof run from standby measures the old station rather than the button it pressed.
+    """
+    if _source(ip) != "STANDBY":
+        return
+    _key(ip, "POWER")
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline and _source(ip) == "STANDBY":
+        time.sleep(1)
+    time.sleep(3)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -235,12 +268,23 @@ def main(argv: list[str] | None = None) -> int:
             if not args.confirm:
                 return emit(False, {"note": "re-run with --confirm; the speaker will restart and "
                                             "be unavailable for about 80 seconds"})
+            # Measured on two ST20s on 27.0.6: a reboot brought them back at volume 10, not the
+            # owner's 41, so the volume is read first and put back once the sources are up.
+            volume_before = _volume(args.ip)
             telnet_run(args.ip, ["sys reboot"])
             down = wait_down(args.ip)
             if down is None:
                 return emit(False, {"error": "the speaker never went down, so the reboot did not "
                                              "happen"})
             up = wait_up(args.ip)
+            if up is None:
+                return emit(False, {"down_after_s": down, "up_after_s": None,
+                                    "volume_before": volume_before,
+                                    "next": "The speaker did not come back on this address. One whose "
+                                            "address comes from plain DHCP can return on another "
+                                            "one: run soundtouch_find.py --service <service> to "
+                                            "find it, then give it a DHCP reservation. Its volume "
+                                            f"was {volume_before} before the reboot."})
             deadline = time.monotonic() + args.sources_wait
             ready: dict[str, str] = {}
             while time.monotonic() < deadline:
@@ -252,13 +296,24 @@ def main(argv: list[str] | None = None) -> int:
                 if all(v == "READY" for v in ready.values()):
                     break
                 time.sleep(5)
-            return emit(bool(ready) and all(v == "READY" for v in ready.values()),
-                        {"down_after_s": down, "up_after_s": up, "sources": ready})
+            volume_after = _volume(args.ip)
+            if volume_before is not None and volume_after != volume_before:
+                try:
+                    _post(args.ip, "volume", f"<volume>{volume_before}</volume>")
+                    time.sleep(1)
+                except OSError:
+                    pass
+                volume_after = _volume(args.ip)
+            return emit(bool(ready) and all(v == "READY" for v in ready.values())
+                        and (volume_before is None or volume_after == volume_before),
+                        {"down_after_s": down, "up_after_s": up, "sources": ready,
+                         "volume_before": volume_before, "volume_after": volume_after})
 
         if not args.confirm:
             return emit(False, {"note": f"re-run with --confirm; this presses PRESET_{args.preset}"
                                         " and starts audio at the speaker's current volume. "
                                         "Turn the volume down first."})
+        _wake(args.ip)
         _key(args.ip, f"PRESET_{args.preset}")
         states: list[str] = []
         item = "-"

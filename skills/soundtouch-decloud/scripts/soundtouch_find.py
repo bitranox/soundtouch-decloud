@@ -67,7 +67,9 @@ def describe_state(verdict: str) -> str:
                             "radio sources sends it to a different address, so stations and "
                             "presets fail. The service's own settings name another machine - "
                             "usually because it was copied from another install. Fix server_url "
-                            "in the service's settings.json (or its Settings page) and restart it.",
+                            "in the service's settings.json (or its Settings page), restart it, "
+                            "then restart every speaker: a speaker reads these addresses when it "
+                            "starts and keeps the old ones until it restarts.",
         "needs-account": "This speaker has no account attached, so it will not load any radio at "
                          "all until one is bound to it.",
         "sources-not-ready": "This speaker has not finished loading its radio sources. If it was "

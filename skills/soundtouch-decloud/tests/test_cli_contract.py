@@ -333,6 +333,7 @@ def test_health_is_a_no_when_the_registry_names_another_host(
     body = _envelope(capsys)
     assert rc == 1 and body["ok"] is False
     assert "settings.json" in str(body["data"]["next"])  # type: ignore[index]
+    assert "reboot every speaker" in str(body["data"]["next"])  # type: ignore[index]
 
 
 def test_health_cannot_answer_without_the_registry(

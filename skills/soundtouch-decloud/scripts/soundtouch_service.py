@@ -252,7 +252,10 @@ def main(argv: list[str] | None = None) -> int:
                         "persisted settings.json server_url beats the SERVER_URL it was started "
                         "with, which is what a copied install carries over. Set server_url and "
                         "https_server_url there (or on the Settings page) to this service's own "
-                        "address and restart it.")
+                        "address and restart it. Then reboot every speaker "
+                        "(soundtouch_onboard.py reboot --confirm): a speaker reads the registry "
+                        "when it starts, so until it restarts it keeps the old address, and this "
+                        "check, which reads the SERVICE, already says ok.")
         return _emit("health", False, data)
     return _emit("health", True, data)
 

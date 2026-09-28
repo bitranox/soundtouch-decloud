@@ -7,6 +7,28 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.9.1] 2026-09-29
+
+From converting three installs to the relative form.
+
+### Fixed
+
+- **`onboard play` could prove the wrong station.** A preset key pressed on a speaker in standby
+  only wakes it, onto whatever it played last, so the proof measured the old station (and passed
+  when the two happened to match). It now wakes the speaker first and presses the preset once it
+  is up.
+- **`onboard reboot` puts the volume back.** Two ST20s on 27.0.6 came back from a reboot at volume
+  10 instead of their 41. The volume is read before and restored after, and both are reported.
+- **`onboard reboot` names the likely cause when a speaker does not come back:** one on plain DHCP
+  can return on another address, and `soundtouch_find.py` finds it.
+
+### Changed
+
+- **After a registry change, every speaker must be rebooted**, and the docs, `health` and `find`
+  now say so. A speaker reads the registry when it starts and keeps the old base URLs until it
+  restarts, while `health` and `find` read the service and already report ok. Measured: a relative
+  preset on a speaker not restarted since the fix fetched nothing; after one reboot it played.
+
 ## [1.9.0] 2026-09-28
 
 Follows AfterTouch v0.138.0, which writes Internet Radio presets in a relative form

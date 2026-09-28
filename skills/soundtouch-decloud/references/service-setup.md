@@ -104,7 +104,9 @@ themselves look correctly migrated. After any such copy, and after every address
 uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
 ```
 
-It exits 1 and names `settings.json` when the registry advertises another address.
+It exits 1 and names `settings.json` when the registry advertises another address. After
+correcting it, reboot every speaker: a speaker reads the registry when it starts, so until then it
+keeps using the old address even though `health` already says ok.
 
 **Which networking mode depends on the operating system, and getting it wrong is the commonest way
 this setup disappoints.** Automatic discovery is SSDP and mDNS, which are multicast, and Docker's

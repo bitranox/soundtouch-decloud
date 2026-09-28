@@ -100,6 +100,11 @@ def test_the_registry_advice_names_the_file_that_causes_it():
     assert "settings.json" in F.describe_state("registry-foreign")
 
 
+def test_the_registry_advice_says_the_speakers_must_restart():
+    """A fixed registry is invisible to a speaker until it reboots; every check reads ok before."""
+    assert "restart every speaker" in F.describe_state("registry-foreign")
+
+
 GETPDO_OURS = """CurrentSystemConfiguration {
   bmxRegistryUrl {
     text: "http://192.0.2.10:8000/bmx/registry/v1/services"

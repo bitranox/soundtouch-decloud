@@ -47,7 +47,20 @@ not as a fault.
 
 To fix it, stop the service, set `server_url` and `https_server_url` in `settings.json` to the
 service's own address (or change it on the Settings page, which saves the same file), start it,
-and run `health` again.
+and run `health` again. Then **reboot every speaker**, one at a time:
+
+```bash
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> reboot --confirm
+```
+
+A speaker reads the registry when it starts and keeps the base URLs it got until it restarts.
+`health` and `soundtouch_find.py` read the registry from the SERVICE, so both say ok straight
+after the fix while every speaker still resolves against the old address. Measured: a relative
+preset on a speaker that had not restarted since the fix was pressed, fetched nothing, and left
+the speaker on its previous station; after one reboot the same button played. `reboot` puts the
+volume back afterwards, because a reboot can reset it (two ST20s came back at 10), and if a
+speaker does not return on its address it says so: one on plain DHCP can come back on another.
+The same applies after ANY registry change, including moving the service to a new address.
 
 ## It answers, and refuses every source
 

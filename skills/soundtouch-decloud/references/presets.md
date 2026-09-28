@@ -260,8 +260,12 @@ uv run scripts/soundtouch_presets.py relativize --ip <speaker-ip> --outdir ./bac
 
 Check the registry first (`soundtouch_service.py health --service <service>`): a relative preset resolves through it,
 so on a service whose registry names another host the conversion turns working presets into
-silent ones. Convert one button, listen to it, then the rest. Account sharing may carry the change
-to the other speakers of the account, which is harmless: it is the same station.
+silent ones. If the registry was corrected since the speakers last started, reboot them before
+converting: a speaker resolves against the registry it read at boot, not the one the service
+serves now (see "The registry names another host" in troubleshooting.md). Convert one button,
+play it with `soundtouch_onboard.py --ip <speaker-ip> play --preset 1 --expect <station> --confirm`
+(volume down first), then the rest. Account sharing may carry the change to
+the other speakers of the account, which is harmless: it is the same station.
 
 `check` reports which BUTTONS are wrong, not just which streams are absent. The right station on
 the wrong button is still wrong, and comparing streams alone calls that correct.

@@ -18,6 +18,7 @@ import socket
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
 TELNET_PORT = 17000
@@ -37,9 +38,16 @@ RADIO_SOURCES = ("TUNEIN", "LOCAL_INTERNET_RADIO", "RADIO_BROWSER")
 # The form this skill wrote before 1.8.0. Still READ, because speakers keep what was stored, and
 # some of AfterTouch's own playback paths still produce it; never written any more.
 PLAYBACK_PATH = "/custom/v1/playback/"
-# The form AfterTouch's player and CLI write, and so the one its catalogue, its stored-vs-reported
-# comparison and its sharing between speakers all see. Writing anything else is a second format.
-ORION_PATH = "/core02/svc-bmx-adapter-orion/prod/orion/station"
+# The Orion adapter, where LOCAL_INTERNET_RADIO lives on a BMX host. AfterTouch's registry advertises
+# it as that source's baseUrl, "<service>" + ORION_BASE_PATH.
+ORION_BASE_PATH = "/core02/svc-bmx-adapter-orion/prod/orion"
+# The station endpoint below it. A location starting with this is the RELATIVE form AfterTouch's
+# player and CLI write since v0.138.0 and the one this skill writes: the speaker prepends the baseUrl
+# its registry gave it, so the preset follows the service to a new address.
+ORION_STATION_PATH = "/station"
+# The ABSOLUTE form: the same station with a host in front. Still read everywhere, and still plays;
+# written only when asked, for firmware that cannot resolve the relative form.
+ORION_PATH = ORION_BASE_PATH + ORION_STATION_PATH
 # What Go's json.Marshal escapes on top of JSON itself (its HTML-safe default).
 _GO_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026",
                     "\u2028": "\\u2028", "\u2029": "\\u2029"}
@@ -56,6 +64,8 @@ SSH_INJECT = ";touch /tmp/remote_services;/etc/init.d/sshd start"
 __all__ = [
     "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
     "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "orion_location", "ORION_PATH",
+    "ORION_BASE_PATH", "ORION_STATION_PATH", "relative_orion_location", "relativize_plan",
+    "registry_verdict",
     "PLAYBACK_PATH", "decode_playback_location", "slots_to_write", "missing_streams",
     "parse_presets", "parse_preset_slots", "parse_preset_items", "port_open", "telnet_run",
     "http_get",
@@ -178,14 +188,20 @@ def build_enable_ssh_commands(service: str, *, full_config: bool = False) -> lis
     ]
 
 
-def orion_location(service: str, stream_url: str, name: str, *, image_url: str = "") -> str:
+def orion_location(stream_url: str, name: str, *, image_url: str = "", service: str = "") -> str:
     """Wrap a stream URL as a preset location the speaker can actually follow.
 
     A LOCAL_INTERNET_RADIO location is FOLLOWED by the speaker, which expects a station document
     describing the stream. Given the stream URL itself the speaker receives audio where it expected
     a document, holds the source about twenty seconds and discards it without ever buffering.
 
-    Mirrors `BuildOrionLocation` in upstream's pkg/service/bmx/bmx.go (checked against v0.137.1)
+    Without `service` this is the RELATIVE form `/station?data=...`, which the speaker resolves
+    against the LOCAL_INTERNET_RADIO baseUrl from its BMX registry, so the preset keeps playing when
+    the service moves to another address. That makes the registry load-bearing: it must advertise
+    an address the speaker can reach (see registry_verdict). With `service` the host is written in
+    front, the absolute form, for firmware that cannot resolve a relative location.
+
+    Mirrors `BuildOrionLocation` in upstream's pkg/service/bmx/bmx.go (checked against v0.138.0)
     byte for byte: the JSON carries Go's field order and its escaping of < > & U+2028 U+2029, the
     base64 is the standard alphabet with padding, and the query escaping matches url.QueryEscape.
     A copy can drift, so `check` reads the stream back out of the `data` blob rather than comparing
@@ -196,7 +212,87 @@ def orion_location(service: str, stream_url: str, name: str, *, image_url: str =
     for char, escaped in _GO_JSON_ESCAPES.items():
         payload = payload.replace(char, escaped)
     encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-    return f"{service.rstrip('/')}{ORION_PATH}?data={urllib.parse.quote_plus(encoded, safe='')}"
+    relative = f"{ORION_STATION_PATH}?data={urllib.parse.quote_plus(encoded, safe='')}"
+    return f"{service.rstrip('/')}{ORION_BASE_PATH}{relative}" if service else relative
+
+
+def relative_orion_location(location: str) -> str:
+    """The relative form of an Orion station location, or "" if it is not one.
+
+    A port of upstream's models.RelativeOrionLocation (v0.138.0): the relative form comes back as it
+    is, and an absolute one loses everything up to and including the Orion base path, WHATEVER the
+    host - a bose.io one included, because the relative form resolves against this service's
+    registry rather than against the host it names.
+    """
+    location = location.strip()
+    if location.startswith(ORION_STATION_PATH):
+        rest = location[len(ORION_STATION_PATH):]
+        return location if rest == "" or rest.startswith("?") else ""
+    parsed = urllib.parse.urlsplit(location)
+    if not parsed.scheme or not parsed.netloc or parsed.path != ORION_PATH:
+        return ""
+    return ORION_STATION_PATH + (f"?{parsed.query}" if parsed.query else "")
+
+
+def relativize_plan(raw: str) -> list[dict[str, object]]:
+    """Which buttons hold an ABSOLUTE Orion location, and the storePreset body that fixes each.
+
+    The body carries the slot's ContentItem exactly as the speaker reported it - name, art, source,
+    type, account - with only the location swapped for its relative form, so the station, its
+    picture and its button are what they were. Only LOCAL_INTERNET_RADIO is touched: a TuneIn or
+    Spotify location is not an Orion station however it is spelled.
+    """
+    try:
+        root = ET.fromstring(raw)  # noqa: S314 - the speaker's own /presets on the LAN
+    except ET.ParseError:
+        return []
+    plan: list[dict[str, object]] = []
+    for preset in root.iter("preset"):
+        item = preset.find("ContentItem")
+        if item is None or item.get("source") != "LOCAL_INTERNET_RADIO":
+            continue
+        old = item.get("location", "")
+        new = relative_orion_location(old)
+        if not new or new == old:
+            continue
+        item.set("location", new)
+        body = f'<preset id="{preset.get("id")}">{ET.tostring(item, encoding="unicode")}</preset>'
+        plan.append({"button": int(preset.get("id", "0")), "old": old, "new": new, "body": body})
+    return plan
+
+
+def _origin(url: str) -> str:
+    """scheme://host:port with the default port spelled out, so equal addresses compare equal."""
+    parts = urllib.parse.urlsplit(url.strip())
+    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme, 0)
+    return f"{parts.scheme}://{(parts.hostname or '').lower()}:{port}"
+
+
+def registry_verdict(service: str, body: str) -> dict[str, object]:
+    """Does the BMX registry send speakers back to THIS service? ok, foreign, dns-mode or unreadable.
+
+    Every radio source a speaker mounts comes from the baseUrl its registry names, and a relative
+    preset resolves against it, so a registry naming another host breaks radio while every speaker
+    still reads migrated. The usual cause is a copied service: AfterTouch's persisted
+    settings.json `server_url` beats the SERVER_URL it was started with, so a container cloned from
+    another install keeps advertising the machine it was cloned from. In AfterTouch's DNS mode the
+    registry names content.api.bose.io on purpose, which is reported as such rather than as foreign.
+    """
+    try:
+        services = json.loads(body).get("bmx_services")
+        advertised = {str(s["id"]["name"]): str(s["baseUrl"]) for s in services
+                      if s.get("id", {}).get("name") in ("TUNEIN", "LOCAL_INTERNET_RADIO")}
+    except (ValueError, AttributeError, TypeError, KeyError):
+        advertised = {}
+    result: dict[str, object] = {"expected": _origin(service), "advertised": advertised}
+    if set(advertised) != {"TUNEIN", "LOCAL_INTERNET_RADIO"}:
+        return {**result, "verdict": "unreadable"}
+    origins = {_origin(url) for url in advertised.values()}
+    if origins == {_origin(service)}:
+        return {**result, "verdict": "ok"}
+    if all(is_cloud_location(url) for url in advertised.values()):
+        return {**result, "verdict": "dns-mode"}
+    return {**result, "verdict": "foreign"}
 
 
 def decode_playback_location(location: str) -> str:

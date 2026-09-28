@@ -7,6 +7,37 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.9.0] 2026-09-28
+
+Follows AfterTouch v0.138.0, which writes Internet Radio presets in a relative form
+(gesellix/Bose-SoundTouch#660, #769). Checked against the upstream tree at v0.138.0.
+
+### Changed
+
+- **Presets are written in the relative Orion form, `/station?data=...`.** The speaker resolves it
+  against the `LOCAL_INTERNET_RADIO` base URL its BMX registry names, so a preset keeps playing
+  when the service moves to another address. `orion_location` builds it byte for byte as
+  upstream's `BuildOrionLocation` does, pinned by golden values from upstream's own Go code. The
+  absolute form is still read everywhere and is written by `restore --absolute --service <url>`,
+  for firmware that cannot resolve a relative location (verified upstream on 27.0.6 only).
+- **`check` and `restore` no longer need `--service`.** The relative form names no host. The
+  option is still accepted; `restore` uses it only with `--absolute`.
+- **A template holding a relative location is refused as already wrapped**, instead of with the
+  misleading "has no stream URL yet".
+
+### Added
+
+- **`soundtouch_presets.py relativize`** stores every absolute Orion preset on a speaker again in
+  the relative form, keeping station, name, picture and button, after backing the presets up. The
+  same fix AfterTouch's Health page offers.
+- **The BMX registry is checked.** `soundtouch_service.py health` exits 1 when the registry names
+  another address than the service, and `soundtouch_find.py` reports `registry-foreign` for a
+  speaker whose registry does. The cause it names: AfterTouch's persisted `settings.json`
+  `server_url` beats `SERVER_URL`, so a copied data directory keeps advertising the machine it was
+  copied from, while every speaker still reads migrated. Found on a real install whose registry
+  named an address its speakers could not reach; its absolute presets hid it, and converting them
+  to the relative form would have silenced every one.
+
 ## [1.8.0] 2026-09-27
 
 Everything here comes from a review by the AfterTouch maintainer

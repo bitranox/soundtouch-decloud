@@ -160,6 +160,17 @@ def test_restore_requires_confirm_but_check_does_not() -> None:
     assert not hasattr(P.build_parser().parse_args(["check", *common]), "confirm")
 
 
+def test_check_and_restore_no_longer_need_a_service() -> None:
+    """The relative form names no host, so the service address is only for --absolute."""
+    common = ["--ip", "192.0.2.31", "--template", "t.json"]
+    assert P.build_parser().parse_args(["restore", *common]).service == ""
+    assert P.build_parser().parse_args(["check", *common]).service == ""
+
+
+def test_relativize_requires_confirm() -> None:
+    assert P.build_parser().parse_args(["relativize", "--ip", "192.0.2.31"]).confirm is False
+
+
 def test_enable_ssh_on_an_unpaired_speaker_refuses_with_an_envelope(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The one precondition the command cannot work without, and the only path that exits 2.
@@ -290,3 +301,42 @@ def test_a_paired_speaker_records_no_bypass(
     _stub_speaker(monkeypatch, [False, True])
     O.main([*ENABLE, "--assume-paired"])
     assert "precondition_bypassed" not in _envelope(capsys)["data"]
+
+
+def _service(monkeypatch: pytest.MonkeyPatch, registry_host: str | None) -> None:
+    """The service at its HTTP edge: two devices, and a registry naming `registry_host`."""
+    def get(url: str, timeout: float = 8.0) -> str:
+        if url.endswith("/api/setup/devices"):
+            return json.dumps([{"name": "Room1"}, {"name": "Room2"}])
+        if registry_host is None:
+            raise S.SpeakerError(f"{url}: refused")
+        return json.dumps({"bmx_services": [
+            {"id": {"name": "TUNEIN"}, "baseUrl": f"{registry_host}/bmx/tunein"},
+            {"id": {"name": "LOCAL_INTERNET_RADIO"},
+             "baseUrl": f"{registry_host}/core02/svc-bmx-adapter-orion/prod/orion"}]})
+    monkeypatch.setattr(S, "http_get", get)
+
+
+def test_health_is_ok_when_the_registry_names_the_service(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _service(monkeypatch, "http://192.0.2.10:8000")
+    rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
+    body = _envelope(capsys)
+    assert rc == 0 and body["data"]["registry"]["verdict"] == "ok"  # type: ignore[index]
+
+
+def test_health_is_a_no_when_the_registry_names_another_host(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The copied-container fault: the service answers, and sends every speaker somewhere else."""
+    _service(monkeypatch, "http://192.0.2.20:8000")
+    rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
+    body = _envelope(capsys)
+    assert rc == 1 and body["ok"] is False
+    assert "settings.json" in str(body["data"]["next"])  # type: ignore[index]
+
+
+def test_health_cannot_answer_without_the_registry(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _service(monkeypatch, None)
+    rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
+    assert rc == 2 and _envelope(capsys)["ok"] is False

@@ -62,7 +62,7 @@ def test_a_location_with_nothing_to_decode_yields_empty(location):
 
 
 def test_our_own_orion_wrapping_round_trips():
-    wrapped = C.orion_location("http://192.0.2.10:8000", "https://radio.example.com/s", "S")
+    wrapped = C.orion_location("https://radio.example.com/s", "S")
     assert C.stream_url_from_location(wrapped) == "https://radio.example.com/s"
 
 

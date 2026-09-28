@@ -3,9 +3,10 @@
 
     uv run scripts/soundtouch_service.py check-docker
     uv run scripts/soundtouch_service.py render --host 192.0.2.10 --out docker-compose.yml
-
-Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
     uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
+
+`health` also reads the BMX registry the speakers are sent to and says no when it names another
+address. Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
 """
 
 from __future__ import annotations
@@ -18,10 +19,10 @@ import subprocess
 import sys
 
 try:
-    from soundtouch_core import SpeakerError, http_get
+    from soundtouch_core import SpeakerError, http_get, registry_verdict
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-    from soundtouch_core import SpeakerError, http_get
+    from soundtouch_core import SpeakerError, http_get, registry_verdict
 
 LOOPBACK_HINT = "must be an address the SPEAKERS can reach, never localhost or 127.0.0.1"
 
@@ -235,8 +236,25 @@ def main(argv: list[str] | None = None) -> int:
         devices = json.loads(body)
     except json.JSONDecodeError:
         return _emit("health", False, {"error": "the service answered but not with JSON"}, code=2)
-    return _emit("health", True, {"devices": len(devices),
-                                  "names": [d.get("name") for d in devices if isinstance(d, dict)]})
+    data = {"devices": len(devices),
+            "names": [d.get("name") for d in devices if isinstance(d, dict)]}
+    try:
+        registry = registry_verdict(args.service, http_get(
+            f"{args.service.rstrip('/')}/bmx/registry/v1/services"))
+    except SpeakerError as exc:
+        return _emit("health", False, {**data, "error": f"registry: {exc}"}, code=2)
+    data["registry"] = registry
+    if registry["verdict"] == "unreadable":
+        return _emit("health", False, {**data, "error": "the registry did not name TUNEIN and "
+                                                        "LOCAL_INTERNET_RADIO"}, code=2)
+    if registry["verdict"] == "foreign":
+        data["next"] = ("The service sends every speaker to another address for its radio. Its "
+                        "persisted settings.json server_url beats the SERVER_URL it was started "
+                        "with, which is what a copied install carries over. Set server_url and "
+                        "https_server_url there (or on the Settings page) to this service's own "
+                        "address and restart it.")
+        return _emit("health", False, data)
+    return _emit("health", True, data)
 
 
 if __name__ == "__main__":

@@ -107,13 +107,13 @@ checker that needs the missing tool is no checker at all.
 Each prints a JSON envelope; exit 0 yes, 1 no, 2 error. Anything that CHANGES a speaker requires
 `--confirm`, so the read half is always safe to run.
 
-| Script                    | Use it to                                                                                        |
-|---------------------------|--------------------------------------------------------------------------------------------------|
-| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`     |
-| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                          |
-| `soundtouch_find.py`      | Discover speakers and report what state each is in                                               |
-| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                 |
-| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets |
+| Script                    | Use it to                                                                                                                                       |
+|---------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                    |
+| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                                                                         |
+| `soundtouch_find.py`      | Discover speakers and report what state each is in                                                                                              |
+| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                                                                |
+| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert absolute presets to the relative form |
 
 ## When it does not work
 
@@ -145,5 +145,6 @@ issue rather than something they did wrong.
 | Putting the raw stream URL in a preset                             | Accepted at write time, never plays                                                                                                                                                                                        |
 | Writing a harvested or researched stream without fetching it first | A station that moved or died is accepted at write time and stays silent. One of six harvested presets was already dead                                                                                                     |
 | Treating an `.m3u`/`.pls` link as the stream                       | Served as `audio/x-mpegurl`, so an `audio/` test passes a text file that plays nothing                                                                                                                                     |
+| Copying a service's data directory to set up another one           | Its `settings.json` `server_url` beats `SERVER_URL`, so the registry sends every speaker to the old machine. `soundtouch_service.py health --service <service>` says no; see troubleshooting.md                            |
 | Letting the service's address come from plain DHCP                 | Every speaker breaks at once, weeks later, when the lease changes                                                                                                                                                          |
 | Declaring failure 30 seconds after a reboot                        | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging                                                                                                                                                |

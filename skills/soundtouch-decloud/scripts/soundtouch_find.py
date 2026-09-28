@@ -14,12 +14,14 @@ import sys
 try:
     from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, clock_state,
                                  cloud_leftovers, http_date_header, http_get, parse_presets,
-                                 parse_sources, parse_urls, port_open, telnet_run)
+                                 parse_sources, parse_urls, port_open, registry_verdict,
+                                 telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
     from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, SpeakerError, clock_state,
                                  cloud_leftovers, http_date_header, http_get, parse_presets,
-                                 parse_sources, parse_urls, port_open, telnet_run)
+                                 parse_sources, parse_urls, port_open, registry_verdict,
+                                 telnet_run)
 
 __all__ = ["build_parser", "classify", "describe_state", "speaker_state", "main"]
 
@@ -31,6 +33,12 @@ def classify(state: dict[str, object]) -> str:
         return "not-answering"
     if state.get("cloud_leftovers"):
         return "needs-migration"
+    # Right after migration, because it is the fault that hides behind a finished one: every URL
+    # names the service, every source reads READY, and radio still fails. Only "foreign" counts;
+    # an unreadable registry is not knowing, and DNS mode names the Bose cloud on purpose.
+    registry = state.get("registry") or {}
+    if isinstance(registry, dict) and registry.get("verdict") == "foreign":
+        return "registry-foreign"
     if not state.get("account"):
         return "needs-account"
     sources = state.get("sources") or {}
@@ -55,6 +63,11 @@ def describe_state(verdict: str) -> str:
                          "the service and not on a guest network.",
         "needs-migration": "This speaker is still trying to reach the Bose cloud, which no longer "
                            "exists. It needs its service addresses rewritten.",
+        "registry-foreign": "This speaker is set up correctly, but the service it asks for its "
+                            "radio sources sends it to a different address, so stations and "
+                            "presets fail. The service's own settings name another machine - "
+                            "usually because it was copied from another install. Fix server_url "
+                            "in the service's settings.json (or its Settings page) and restart it.",
         "needs-account": "This speaker has no account attached, so it will not load any radio at "
                          "all until one is bound to it.",
         "sources-not-ready": "This speaker has not finished loading its radio sources. If it was "
@@ -92,6 +105,14 @@ def speaker_state(ip: str) -> dict[str, object]:
             state["cloud_leftovers"] = cloud_leftovers(urls)
         except SpeakerError as exc:
             state["telnet_error"] = str(exc)
+    registry_url = str((state.get("urls") or {}).get("bmxRegistryUrl", ""))  # type: ignore[union-attr]
+    if registry_url and not state.get("cloud_leftovers"):
+        # The registry THIS speaker reads, not the one the operator thinks it reads: the two differ
+        # exactly when something is wrong.
+        try:
+            state["registry"] = registry_verdict(registry_url, http_get(registry_url))
+        except SpeakerError as exc:
+            state["registry"] = {"verdict": "unreadable", "error": str(exc)}
     try:
         state["sources"] = parse_sources(http_get(f"http://{ip}:{API_PORT}/sources"))
     except SpeakerError as exc:

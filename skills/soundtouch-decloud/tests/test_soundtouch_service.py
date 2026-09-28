@@ -23,7 +23,7 @@ def test_render_advertises_the_given_host_not_loopback():
     assert "127.0.0.1" not in out and "localhost" not in out
 
 
-# Every variable upstream's soundtouch-service reads from the environment, as of v0.137.1
+# Every variable upstream's soundtouch-service reads from the environment, checked at v0.138.0
 # (cmd/soundtouch-service/main.go). A name missing here that render emits is one upstream ignores.
 UPSTREAM_ENV = {
     "AMAZON_CLIENT_ID", "AMAZON_CLIENT_SECRET", "AMAZON_PROFILE_URL", "AMAZON_REDIRECT_URI",

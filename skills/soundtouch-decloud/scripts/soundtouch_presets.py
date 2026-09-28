@@ -4,11 +4,15 @@
     uv run scripts/soundtouch_presets.py harvest  --backup before.xml --out speaker.json
     uv run scripts/soundtouch_presets.py validate --template speaker.json
     uv run scripts/soundtouch_presets.py backup  --ip 192.0.2.31 --outdir ./backup
-    uv run scripts/soundtouch_presets.py check   --ip 192.0.2.31 --template speaker.json \
-                                                 --service http://192.0.2.10:8000
+    uv run scripts/soundtouch_presets.py check   --ip 192.0.2.31 --template speaker.json
+    uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json --confirm
     uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json \
-                                                 --service http://192.0.2.10:8000 --confirm
+                                                 --service http://192.0.2.10:8000 --absolute --confirm
+    uv run scripts/soundtouch_presets.py relativize --ip 192.0.2.31 --outdir ./backup --confirm
 
+Presets are written in the relative Orion form, which follows the service to a new address;
+--absolute writes the host in, for firmware that cannot resolve a relative location. `relativize`
+stores every absolute Orion preset on a speaker again in the relative form.
 Nothing is written without --confirm.
 Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
 """
@@ -24,14 +28,16 @@ import urllib.error
 import urllib.request
 
 try:
-    from soundtouch_core import (API_PORT, ORION_PATH, PLAYBACK_PATH, SpeakerError,
-                                 classify_stream, harvest_presets, http_get, orion_location,
-                                 parse_sources, playlist_targets, slots_to_write)
+    from soundtouch_core import (API_PORT, PLAYBACK_PATH, SpeakerError, classify_stream,
+                                 harvest_presets, http_get, orion_location, parse_sources,
+                                 playlist_targets, relative_orion_location, relativize_plan,
+                                 slots_to_write)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from soundtouch_core import (API_PORT, ORION_PATH, PLAYBACK_PATH, SpeakerError,
-                                 classify_stream, harvest_presets, http_get, orion_location,
-                                 parse_sources, playlist_targets, slots_to_write)
+    from soundtouch_core import (API_PORT, PLAYBACK_PATH, SpeakerError, classify_stream,
+                                 harvest_presets, http_get, orion_location, parse_sources,
+                                 playlist_targets, relative_orion_location, relativize_plan,
+                                 slots_to_write)
 
 REQUIRED_FIELDS = ("buttonNumber", "name", "location")
 # A kept entry (an album, a library track) is not a stream, so fetching it proves nothing. It is
@@ -69,7 +75,8 @@ def load_template(path: str) -> dict[str, object]:
         seen.add(button)
         if entry.get("keep"):
             continue  # not radio: carried as stored, never written, so there is no stream to demand
-        if any(path in entry["location"] for path in (PLAYBACK_PATH, ORION_PATH)):
+        location = str(entry["location"])
+        if PLAYBACK_PATH in location or relative_orion_location(location):
             raise ValueError("location must be the PLAIN stream URL; the wrapping is added on write")
         if not str(entry["location"]).startswith(("http://", "https://")):
             raise ValueError(
@@ -104,9 +111,12 @@ def radio_ready(ip: str) -> bool:
         return False
 
 
-def preset_xml(service: str, entry: dict[str, object]) -> str:
-    """The body for one preset slot, with the location wrapped the way AfterTouch's player does."""
-    location = orion_location(service, str(entry["location"]), str(entry["name"]))
+def preset_xml(entry: dict[str, object], *, service: str = "") -> str:
+    """The body for one preset slot, with the location wrapped the way AfterTouch's player does.
+
+    Relative unless `service` is given; see orion_location for when the absolute form is wanted.
+    """
+    location = orion_location(str(entry["location"]), str(entry["name"]), service=service)
     name = str(entry["name"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (f'<ContentItem source="{entry.get("source", "LOCAL_INTERNET_RADIO")}" '
             f'type="{entry.get("contentItemType", "stationurl")}" '
@@ -114,12 +124,38 @@ def preset_xml(service: str, entry: dict[str, object]) -> str:
             f"<itemName>{name}</itemName></ContentItem>")
 
 
-def _store(ip: str, service: str, entry: dict[str, object]) -> None:
-    url = f"http://{ip}:{API_PORT}/storePreset"
-    body = (f'<preset id="{entry["buttonNumber"]}">{preset_xml(service, entry)}</preset>').encode()
-    req = urllib.request.Request(url, data=body, method="POST")
+def _post_preset(ip: str, body: str) -> None:
+    """POST one `<preset id="N">...</preset>` body to the speaker's storePreset."""
+    req = urllib.request.Request(f"http://{ip}:{API_PORT}/storePreset", data=body.encode(),
+                                 method="POST")
     with urllib.request.urlopen(req, timeout=15):  # noqa: S310 - fixed http URL built above
         pass
+
+
+def _store(ip: str, entry: dict[str, object], *, service: str = "") -> None:
+    _post_preset(ip, f'<preset id="{entry["buttonNumber"]}">{preset_xml(entry, service=service)}</preset>')
+
+
+def _backup(ip: str, outdir: str) -> dict[str, object]:
+    """Save what the speaker reports now, one file per endpoint; a failed read is recorded, not raised."""
+    out = pathlib.Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    saved: dict[str, object] = {}
+    for endpoint in ("presets", "info", "recents", "sources"):
+        try:
+            body = http_get(f"http://{ip}:{API_PORT}/{endpoint}")
+        except SpeakerError as exc:
+            saved[endpoint] = f"FAILED: {exc}"
+            continue
+        path = out / f"{ip}-{stamp}-{endpoint}.xml"
+        path.write_text(body, encoding="utf-8")
+        saved[endpoint] = str(path)
+    return saved
+
+
+def _backed_up(saved: dict[str, object]) -> bool:
+    return isinstance(saved.get("presets"), str) and not str(saved["presets"]).startswith("FAILED")
 
 
 def _fetch_head(url: str, timeout: float = 8.0) -> tuple[int | None, str, str]:
@@ -171,15 +207,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("backup", "check", "restore"):
+    for name in ("backup", "check", "restore", "relativize"):
         p = sub.add_parser(name)
         p.add_argument("--ip", required=True)
-        if name == "backup":
-            p.add_argument("--outdir", default=".")
+        if name in ("backup", "relativize"):
+            p.add_argument("--outdir", default=".", help="where the backup taken first is saved"
+                           if name == "relativize" else "where the backup is saved")
         else:
             p.add_argument("--template", required=True)
-            p.add_argument("--service", required=True)
+            p.add_argument("--service", default="",
+                           help="the service base URL; only used with --absolute")
         if name == "restore":
+            p.add_argument("--absolute", action="store_true",
+                           help="write the service host into each location (needs --service), "
+                                "for firmware that cannot resolve the relative form")
+        if name in ("restore", "relativize"):
             p.add_argument("--confirm", action="store_true",
                            help="required: without it nothing is written")
     h = sub.add_parser("harvest", help="turn a saved presets XML into a template, holes and all")
@@ -228,21 +270,15 @@ def main(argv: list[str] | None = None) -> int:
         return emit(not bad, {"checked": len(checked), "unplayable": len(bad), "results": checked})
 
     if args.cmd == "backup":
-        out = pathlib.Path(args.outdir)
-        out.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        saved: dict[str, object] = {}
-        for endpoint in ("presets", "info", "recents", "sources"):
-            try:
-                body = http_get(f"http://{args.ip}:{API_PORT}/{endpoint}")
-            except SpeakerError as exc:
-                saved[endpoint] = f"FAILED: {exc}"
-                continue
-            path = out / f"{args.ip}-{stamp}-{endpoint}.xml"
-            path.write_text(body, encoding="utf-8")
-            saved[endpoint] = str(path)
-        ok = isinstance(saved.get("presets"), str) and not str(saved["presets"]).startswith("FAILED")
-        return emit(ok, {"saved": saved}, code=2)
+        saved = _backup(args.ip, args.outdir)
+        return emit(_backed_up(saved), {"saved": saved}, code=2)
+
+    if args.cmd == "relativize":
+        return _relativize(args.ip, args.outdir, confirm=args.confirm, emit=emit)
+
+    if args.cmd == "restore" and args.absolute and not args.service:
+        return emit(False, {"error": "--absolute writes the service host into each preset, so it "
+                                     "needs --service"}, code=2)
 
     try:
         template = load_template(args.template)
@@ -275,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     wrote = []
     for entry in sorted(todo, key=lambda p: p["buttonNumber"]):
         try:
-            _store(args.ip, args.service, entry)  # type: ignore[arg-type]
+            _store(args.ip, entry, service=args.service if args.absolute else "")  # type: ignore[arg-type]
             wrote.append(entry["name"])
         except OSError as exc:
             return emit(False, {"wrote": wrote, "error": f"{entry['name']}: {exc}"}, code=2)
@@ -283,6 +319,44 @@ def main(argv: list[str] | None = None) -> int:
     after = slots_to_write(http_get(f"http://{args.ip}:{API_PORT}/presets"), presets)  # type: ignore[arg-type]
     return emit(not after, {"wrote": wrote, "still_missing": [p["location"] for p in after],
                             "sharing": SHARING_NOTE})
+
+
+def _relativize(ip: str, outdir: str, *, confirm: bool, emit) -> int:  # noqa: ANN001 - main's closure
+    """Store every absolute Orion preset on this speaker again in the relative form.
+
+    The same station, name, art and button; only the location loses its host, so the preset follows
+    the service instead of naming the address it had when it was saved. AfterTouch's Health page
+    offers the same fix. Backed up first, and refused in the boot window like any other write.
+    """
+    try:
+        plan = relativize_plan(http_get(f"http://{ip}:{API_PORT}/presets"))
+    except SpeakerError as exc:
+        return emit(False, {"error": str(exc)}, code=2)
+    buttons = [step["button"] for step in plan]
+    if not plan:
+        return emit(True, {"rewrote": [], "note": "every Orion preset is already relative"})
+    if not confirm:
+        return emit(False, {"would_rewrite": buttons, "note": "re-run with --confirm to write these",
+                            "sharing": SHARING_NOTE})
+    if not radio_ready(ip):
+        return emit(False, {"error": "the radio source is not mounted yet, so a write would be "
+                                     "silently undone. Wait about 80 seconds after a restart."})
+    saved = _backup(ip, outdir)
+    if not _backed_up(saved):
+        return emit(False, {"error": "could not back the presets up first, so nothing was written",
+                            "saved": saved}, code=2)
+    rewrote: list[object] = []
+    for step in plan:
+        try:
+            _post_preset(ip, str(step["body"]))
+        except OSError as exc:
+            return emit(False, {"rewrote": rewrote, "error": f"button {step['button']}: {exc}",
+                                "backup": saved["presets"]}, code=2)
+        rewrote.append(step["button"])
+        time.sleep(0.5)
+    left = [step["button"] for step in relativize_plan(http_get(f"http://{ip}:{API_PORT}/presets"))]
+    return emit(not left, {"rewrote": rewrote, "still_absolute": left, "backup": saved["presets"],
+                           "sharing": SHARING_NOTE})
 
 
 if __name__ == "__main__":

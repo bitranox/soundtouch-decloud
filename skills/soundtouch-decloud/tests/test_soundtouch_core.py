@@ -4,6 +4,7 @@ Every case here is a real reading that a plausible implementation gets wrong, so
 written against the payload shape the speaker actually returns rather than a tidied-up sample.
 """
 import base64
+import json
 
 import pytest
 import soundtouch_core as C
@@ -115,10 +116,12 @@ def test_service_urls_tolerate_a_trailing_slash():
 
 SERVICE = "http://192.0.2.10:8000"
 
-# Produced by upstream's own bmx.BuildOrionLocation (v0.137.1, pkg/service/bmx/bmx.go), run in Go,
-# not by this code. Byte equality is the point: the player compares, catalogues and shares what
-# it stores, so a location that decodes the same but is spelled differently is a second format.
-ORION_GOLDEN = [
+# Produced by upstream's own code run in Go, not by this code: bmx.BuildOrionLocation at v0.138.0
+# (pkg/service/bmx/bmx.go) for the relative form, and SERVICE + models.OrionBasePath + that for the
+# absolute one, which is byte-identical to what BuildOrionLocation wrote at v0.137.1. Byte equality
+# is the point: the player compares, catalogues and shares what it stores, so a location that
+# decodes the same but is spelled differently is a second format.
+ORION_ABSOLUTE_GOLDEN = [
     (("Example Radio", "", "https://radio.example.com/live.mp3"),
      "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data="
      "eyJuYW1lIjoiRXhhbXBsZSBSYWRpbyIsImltYWdlVXJsIjoiIiwic3RyZWFtVXJsIjoiaHR0cHM6Ly9yYWRpby5leGFtc"
@@ -138,21 +141,63 @@ ORION_GOLDEN = [
 ]
 
 
-@pytest.mark.parametrize(("args", "expected"), ORION_GOLDEN)
-def test_orion_location_is_byte_identical_to_upstream(args, expected):
-    name, image, stream = args
-    assert C.orion_location(SERVICE, stream, name, image_url=image) == expected
+# The relative form: the absolute one with SERVICE and the Orion base path cut off.
+ORION_RELATIVE_GOLDEN = [(args, expected[len(SERVICE + C.ORION_BASE_PATH):])
+                         for args, expected in ORION_ABSOLUTE_GOLDEN]
 
 
-@pytest.mark.parametrize(("args", "_expected"), ORION_GOLDEN)
-def test_orion_location_round_trips(args, _expected):
+def test_the_relative_golden_values_are_upstreams():
+    """Pins the derivation above to a literal BuildOrionLocation v0.138.0 printed."""
+    assert ORION_RELATIVE_GOLDEN[0][1] == (
+        "/station?data=eyJuYW1lIjoiRXhhbXBsZSBSYWRpbyIsImltYWdlVXJsIjoiIiwic3RyZWFtVXJsIjoiaHR0c"
+        "HM6Ly9yYWRpby5leGFtcGxlLmNvbS9saXZlLm1wMyJ9")
+
+
+@pytest.mark.parametrize(("args", "expected"), ORION_RELATIVE_GOLDEN)
+def test_orion_location_writes_the_relative_form_byte_identical_to_upstream(args, expected):
     name, image, stream = args
-    assert C.stream_url_from_location(C.orion_location(SERVICE, stream, name, image_url=image)) == stream
+    assert C.orion_location(stream, name, image_url=image) == expected
+
+
+@pytest.mark.parametrize(("args", "expected"), ORION_ABSOLUTE_GOLDEN)
+def test_orion_location_writes_the_absolute_form_only_when_given_a_service(args, expected):
+    name, image, stream = args
+    assert C.orion_location(stream, name, image_url=image, service=SERVICE) == expected
+
+
+@pytest.mark.parametrize(("args", "_expected"), ORION_ABSOLUTE_GOLDEN)
+@pytest.mark.parametrize("service", ["", SERVICE])
+def test_orion_location_round_trips(args, _expected, service):
+    name, image, stream = args
+    location = C.orion_location(stream, name, image_url=image, service=service)
+    assert C.stream_url_from_location(location) == stream
 
 
 def test_orion_location_tolerates_a_trailing_slash_on_the_service():
-    assert C.orion_location(SERVICE + "/", "https://a.example.com/s", "A") == \
-        C.orion_location(SERVICE, "https://a.example.com/s", "A")
+    assert C.orion_location("https://a.example.com/s", "A", service=SERVICE + "/") == \
+        C.orion_location("https://a.example.com/s", "A", service=SERVICE)
+
+
+# Cases upstream's models.RelativeOrionLocation answered at v0.138.0, run in Go.
+@pytest.mark.parametrize(("location", "expected"), [
+    ("/station?data=x", "/station?data=x"),
+    ("https://h.example/core02/svc-bmx-adapter-orion/prod/orion/station?data=x", "/station?data=x"),
+    ("http://h/custom/v1/playback/abc", ""),
+    ("https://h.example/core02/svc-bmx-adapter-orion/prod/orion/stationX?data=x", ""),
+    ("station?data=x", ""),
+    ("/station", "/station"),
+    ("", ""),
+    ("https://radio.example.com/live.mp3", ""),
+])
+def test_relative_orion_location_matches_upstream(location, expected):
+    assert C.relative_orion_location(location) == expected
+
+
+@pytest.mark.parametrize(("args", "expected"), ORION_ABSOLUTE_GOLDEN)
+def test_any_host_absolute_form_relativizes_to_the_upstream_relative_form(args, expected):
+    rel = dict(ORION_RELATIVE_GOLDEN)[args]
+    assert C.relative_orion_location(expected) == rel
+    assert C.relative_orion_location(expected.replace(SERVICE, "https://content.api.bose.io")) == rel
 
 
 def _legacy(stream: str) -> str:
@@ -177,7 +222,7 @@ def _speaker_presets(*slots: tuple[int, str], form=None) -> str:
     By default every slot holds what this skill now writes. `form` swaps in another builder, for
     a slot the player wrote or one left behind by an older version of this skill.
     """
-    build = form or (lambda stream: C.orion_location(SERVICE, stream, "S"))
+    build = form or (lambda stream: C.orion_location(stream, "S"))
     return "<presets>" + "".join(
         f'<preset id="{button}"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
         f'location="{build(stream)}" /></preset>'
@@ -190,7 +235,8 @@ def test_a_slot_the_player_wrote_counts_as_correct():
     Reading only our own old wrapping made `check` exit 1 forever for these and made `restore`
     rewrite the owner's buttons on every run.
     """
-    player = lambda stream: C.orion_location("http://aftertouch.example:8000", stream, "Player")  # noqa: E731
+    player = lambda stream: C.orion_location(stream, "Player",  # noqa: E731
+                                             service="http://aftertouch.example:8000")
     wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
     assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=player), wanted) == []
 
@@ -198,6 +244,98 @@ def test_a_slot_the_player_wrote_counts_as_correct():
 def test_a_slot_in_the_legacy_form_counts_as_correct():
     wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
     assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=_legacy), wanted) == []
+
+
+def test_relative_and_absolute_slots_side_by_side_both_count_as_correct():
+    """The state every install passes through while it converts: some buttons each way."""
+    absolute = lambda stream: C.orion_location(stream, "S", service=SERVICE)  # noqa: E731
+    raw = _speaker_presets((1, "https://a.example.com/s")).replace("</presets>", "") + \
+        _speaker_presets((2, "https://b.example.com/s"), form=absolute).replace("<presets>", "")
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
+              {"buttonNumber": 2, "name": "B", "location": "https://b.example.com/s"}]
+    assert C.slots_to_write(raw, wanted) == []
+
+
+def _registry(host: str = SERVICE, **override: str) -> str:
+    """The shape AfterTouch's /bmx/registry/v1/services returns, trimmed to what is judged."""
+    urls = {"TUNEIN": f"{host}/bmx/tunein",
+            "LOCAL_INTERNET_RADIO": f"{host}{C.ORION_BASE_PATH}",
+            "RADIO_BROWSER": "https://all.api.radio-browser.info/soundtouch", **override}
+    return json.dumps({"bmx_services": [{"id": {"name": name, "value": 1}, "baseUrl": url}
+                                        for name, url in urls.items()]})
+
+
+def test_a_registry_advertising_the_service_itself_is_ok():
+    assert C.registry_verdict(SERVICE, _registry())["verdict"] == "ok"
+
+
+def test_a_registry_advertising_another_host_is_foreign():
+    """What a cloned container does: settings.json still names the machine it was copied from."""
+    verdict = C.registry_verdict("http://192.0.2.20:8000", _registry())
+    assert verdict["verdict"] == "foreign"
+    assert verdict["advertised"]["LOCAL_INTERNET_RADIO"] == f"{SERVICE}{C.ORION_BASE_PATH}"
+
+
+def test_one_foreign_entry_is_enough_to_be_foreign():
+    body = _registry(TUNEIN="http://192.0.2.99:8000/bmx/tunein")
+    assert C.registry_verdict(SERVICE, body)["verdict"] == "foreign"
+
+
+def test_a_trailing_slash_or_default_port_spelling_does_not_read_as_foreign():
+    assert C.registry_verdict(SERVICE + "/", _registry())["verdict"] == "ok"
+    assert C.registry_verdict("http://svc.example", _registry("http://svc.example:80"))["verdict"] == "ok"
+
+
+def test_a_registry_on_the_bose_cloud_is_dns_mode_not_foreign():
+    """In AfterTouch's DNS mode the registry names content.api.bose.io on purpose."""
+    body = _registry("https://content.api.bose.io")
+    assert C.registry_verdict(SERVICE, body)["verdict"] == "dns-mode"
+
+
+@pytest.mark.parametrize("body", ["", "not json", "[]", '{"bmx_services": []}',
+                                  '{"bmx_services": [{"id": {"name": "TUNEIN"}}]}'])
+def test_an_unreadable_registry_says_so_rather_than_ok(body):
+    assert C.registry_verdict(SERVICE, body)["verdict"] == "unreadable"
+
+
+def _raw_presets(*items: tuple[int, str, str]) -> str:
+    """/presets as the speaker returns it, art and account attributes included."""
+    return "<presets>" + "".join(
+        f'<preset id="{button}" createdOn="1" updatedOn="2"><ContentItem source="{source}" '
+        f'type="stationurl" location="{location.replace("&", "&amp;")}" sourceAccount="" '
+        f'isPresetable="true"><itemName>Name {button} &amp; Co</itemName>'
+        f'<containerArt>https://img.example.com/{button}.png</containerArt></ContentItem></preset>'
+        for button, source, location in items) + "</presets>"
+
+
+def test_relativize_plan_rewrites_only_absolute_orion_radio_slots():
+    absolute = C.orion_location("https://a.example.com/s?x=1&y=2", "A", service=SERVICE)
+    raw = _raw_presets((1, "LOCAL_INTERNET_RADIO", absolute),
+                       (2, "LOCAL_INTERNET_RADIO", C.orion_location("https://b.example.com/s", "B")),
+                       (3, "LOCAL_INTERNET_RADIO", _legacy("https://c.example.com/s")),
+                       (4, "TUNEIN", "/v1/playback/station/s12345"))
+    plan = C.relativize_plan(raw)
+    assert [step["button"] for step in plan] == [1]
+    assert plan[0]["old"] == absolute
+    assert plan[0]["new"] == C.orion_location("https://a.example.com/s?x=1&y=2", "A")
+
+
+def test_relativize_plan_keeps_everything_but_the_location():
+    """Same name, art, source and type: the quick fix upstream offers, done from here."""
+    absolute = C.orion_location("https://a.example.com/s?x=1&y=2", "A", service=SERVICE)
+    body = C.relativize_plan(_raw_presets((5, "LOCAL_INTERNET_RADIO", absolute)))[0]["body"]
+    assert body.startswith('<preset id="5">') and body.endswith("</preset>")
+    assert "<itemName>Name 5 &amp; Co</itemName>" in body
+    assert "<containerArt>https://img.example.com/5.png</containerArt>" in body
+    assert 'source="LOCAL_INTERNET_RADIO"' in body and 'type="stationurl"' in body
+    relative = C.orion_location("https://a.example.com/s?x=1&y=2", "A")
+    assert f'location="{relative.replace("&", "&amp;")}"' in body
+    assert "createdOn" not in body and SERVICE not in body
+
+
+def test_relativize_plan_is_empty_when_everything_is_already_relative():
+    raw = _raw_presets((1, "LOCAL_INTERNET_RADIO", C.orion_location("https://a.example.com/s", "A")))
+    assert C.relativize_plan(raw) == []
 
 
 def test_a_kept_entry_is_never_written():

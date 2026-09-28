@@ -95,7 +95,16 @@ address to keep in step.
 its data directory and gives them precedence over environment variables. So if the address in
 the UI's Settings was ever saved, re-rendering the compose file with a new `SERVER_URL` changes
 nothing: change it in Settings too, or check `settings.json`, before concluding the new address
-did not take.
+did not take. The same file travels with the data directory, so a service set up by copying
+another install (a cloned container, a restored backup) keeps advertising the address it was
+copied from. Its BMX registry then sends every speaker there for radio, while the speakers
+themselves look correctly migrated. After any such copy, and after every address change, run:
+
+```bash
+uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
+```
+
+It exits 1 and names `settings.json` when the registry advertises another address.
 
 **Which networking mode depends on the operating system, and getting it wrong is the commonest way
 this setup disappoints.** Automatic discovery is SSDP and mDNS, which are multicast, and Docker's

@@ -78,7 +78,7 @@ explicit `--confirm`, so the read half is always safe to run.
 | `soundtouch_service.py`   | Check Docker, write and validate the compose file, check the service is answering          |
 | `soundtouch_find.py`      | Discover speakers on the network and report the state each one is in                       |
 | `soundtouch_onboard.py`   | Open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
-| `soundtouch_presets.py`   | Back up, harvest, validate, check and restore presets                                      |
+| `soundtouch_presets.py`   | Back up, harvest, validate, check, restore and relativize presets                          |
 
 Beyond the mechanics, the skill knows the things that are easy to get wrong and hard to diagnose:
 
@@ -89,7 +89,12 @@ Beyond the mechanics, the skill knows the things that are easy to get wrong and 
 - **The URL write order is load-bearing.** Persisting before writing saves the OLD values, and
   every command still answers OK.
 - **A raw stream URL in a preset is accepted at write time and never plays.** The speaker follows
-  the location expecting a station document, not audio.
+  the location expecting a station document, not audio. Presets are written in AfterTouch's
+  relative form (`/station?data=...`), which the speaker resolves through the service's registry,
+  so they keep playing when the service moves; the older absolute form is still read.
+- **A copied service keeps the old address.** Its `settings.json` `server_url` beats the
+  `SERVER_URL` it is started with, so the registry sends every speaker to the machine it was
+  copied from. `soundtouch_service.py health --service <service>` checks for it.
 - **A service address from plain DHCP** breaks every speaker at once, weeks later.
 
 ### Recovering the stations

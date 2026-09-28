@@ -125,11 +125,11 @@ location and expects a station document describing the stream. Give it the strea
 receives audio where it expected a document, holds the source about twenty seconds, and discards it
 without ever buffering.
 
-The service provides the document at its Orion station adapter, the same form AfterTouch's own
-player and `soundtouch-cli preset store` write:
+The service provides the document at its Orion station adapter. The form to write is the RELATIVE
+one, the same form AfterTouch's own player and `soundtouch-cli preset store` write since v0.138.0:
 
 ```
-http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=<blob>
+/station?data=<blob>
 ```
 
 `<blob>` is standard base64 (with padding, then query-escaped) of the JSON
@@ -137,18 +137,33 @@ http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=
 does (`BuildOrionLocation` in `pkg/service/bmx/bmx.go`), so the player's catalog, its
 stored-versus-reported comparison and its sharing between speakers all see one format.
 
+The location names no host. The speaker puts the `LOCAL_INTERNET_RADIO` base URL from its BMX
+registry in front of it, the way it already does for TuneIn and Radio Browser, so a preset stored
+this way keeps playing when the service moves to another address. That makes the registry
+load-bearing: it must name an address the speakers can reach. `soundtouch_service.py health --service <service>` and
+`soundtouch_find.py` both check it, see "The registry names another host" in troubleshooting.md.
+
 Right:
 
 ```xml
 <ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl"
-             location="http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=eyJuYW1lIjoi..."
+             location="/station?data=eyJuYW1lIjoi..."
              sourceAccount="" isPresetable="true"><itemName>Example Radio</itemName></ContentItem>
 ```
 
-An older form, `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`, plays too.
-Versions of this skill before 1.8.0 wrote it, and some of the service's own playback paths still
-produce it, so a preset saved from whatever is playing can carry either. `check` reads both, and a
-bare stream URL, by the stream they stand for rather than by the string.
+Two older forms play too, and every script here still reads them:
+
+- The ABSOLUTE Orion form, `http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=<blob>`:
+  the same station with the host written in. AfterTouch before v0.138.0 and this skill before
+  1.9.0 wrote it. It keeps working only while the service stays at that address, so convert it
+  with `relativize` (below) or the quick fix on AfterTouch's Health page. `restore --absolute
+  --service <url>` still writes it, for a speaker whose firmware cannot resolve the relative form:
+  that is verified upstream on firmware 27.0.6 only, so try one button on older firmware first.
+- `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`, written by this skill
+  before 1.8.0 and by some of the service's own playback paths.
+
+`check` reads all three, and a bare stream URL, by the stream they stand for rather than by the
+string, so a button stored in either Orion form counts as correct.
 
 Wrong, and accepted at write time:
 
@@ -219,19 +234,34 @@ device id:
 }
 ```
 
-The `location` here is the PLAIN stream URL. The script builds the Orion wrapping when it writes,
-so the service moving to another address never means editing these files. An entry with
+The `location` here is the PLAIN stream URL. The script builds the relative Orion wrapping when it
+writes, so neither these files nor the presets name the service's address. An entry with
 `"keep": true` is a non-radio preset `harvest` carried over; it is left alone.
 
 ```bash
 # reports, never writes
-uv run scripts/soundtouch_presets.py check --ip <speaker-ip> \
-    --template <speaker>.json --service http://<service-host>:8000
+uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <speaker>.json
 
 # writes the buttons that are wrong - run it by hand, once, when check says so
-uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> \
-    --template <speaker>.json --service http://<service-host>:8000 --confirm
+uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> --template <speaker>.json --confirm
 ```
+
+### Converting absolute presets to the relative form
+
+Presets saved before AfterTouch v0.138.0 (or by this skill before 1.9.0) name the service's
+address. `relativize` stores each such button again in the relative form - same station, name,
+picture and button - after backing the speaker's presets up. Without `--confirm` it only lists the
+buttons it would change:
+
+```bash
+uv run scripts/soundtouch_presets.py relativize --ip <speaker-ip> --outdir ./backup
+uv run scripts/soundtouch_presets.py relativize --ip <speaker-ip> --outdir ./backup --confirm
+```
+
+Check the registry first (`soundtouch_service.py health --service <service>`): a relative preset resolves through it,
+so on a service whose registry names another host the conversion turns working presets into
+silent ones. Convert one button, listen to it, then the rest. Account sharing may carry the change
+to the other speakers of the account, which is harmless: it is the same station.
 
 `check` reports which BUTTONS are wrong, not just which streams are absent. The right station on
 the wrong button is still wrong, and comparing streams alone calls that correct.
@@ -251,7 +281,7 @@ One line per speaker. `check` reports and never writes, so this is safe to leave
 the answer turns out to be:
 
 ```bash
-0 * * * * cd /path/to/skill && uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <file> --service <service> >> /var/log/soundtouch-check.log 2>&1
+0 * * * * cd /path/to/skill && uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <file> >> /var/log/soundtouch-check.log 2>&1
 ```
 
 After a week, read the log rather than your memory of it. Each run appends a JSON envelope, so the
@@ -367,7 +397,9 @@ reads the stream back out of whatever a slot holds instead of comparing strings,
 change shows up as an alarm rather than as silent rewrites. After updating the service, save one
 preset from the player, then run `check` against a template that holds that station on that
 button. Exit 0 means the two still agree. Exit 1 on a slot you can hear playing means the format
-moved: stop using `restore` until this skill is updated.
+moved: stop using `restore` until this skill is updated. Run `soundtouch_service.py health --service <service>` as
+well: an update can reset or re-read the service's settings, and relative presets play only while
+its registry names the service's own address.
 
 ## Acceptance: listen, do not count
 

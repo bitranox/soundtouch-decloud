@@ -341,3 +341,12 @@ def test_health_cannot_answer_without_the_registry(
     _service(monkeypatch, None)
     rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
     assert rc == 2 and _envelope(capsys)["ok"] is False
+
+
+def test_health_on_a_loopback_address_does_not_call_the_registry_foreign(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The obvious way to run it on the service's own machine must not raise a false alarm."""
+    _service(monkeypatch, "http://192.0.2.10:8000")
+    rc = S.main(["health", "--service", "http://127.0.0.1:8000"])
+    body = _envelope(capsys)
+    assert rc == 0 and body["data"]["registry"]["verdict"] == "unjudged"  # type: ignore[index]

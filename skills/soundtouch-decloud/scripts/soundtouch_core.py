@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import html
+import ipaddress
 import json
 import socket
 import time
@@ -268,8 +269,19 @@ def _origin(url: str) -> str:
     return f"{parts.scheme}://{(parts.hostname or '').lower()}:{port}"
 
 
+def _is_loopback(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url.strip()).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def registry_verdict(service: str, body: str) -> dict[str, object]:
-    """Does the BMX registry send speakers back to THIS service? ok, foreign, dns-mode or unreadable.
+    """Does the BMX registry send speakers back to THIS service? ok, foreign, dns-mode, unreadable,
+    or unjudged when `service` is a loopback address, which says nothing about what speakers use.
 
     Every radio source a speaker mounts comes from the baseUrl its registry names, and a relative
     preset resolves against it, so a registry naming another host breaks radio while every speaker
@@ -285,6 +297,12 @@ def registry_verdict(service: str, body: str) -> dict[str, object]:
     except (ValueError, AttributeError, TypeError, KeyError):
         advertised = {}
     result: dict[str, object] = {"expected": _origin(service), "advertised": advertised}
+    if _is_loopback(service):
+        # The address this was run with names the service as THIS machine sees it, not as a
+        # speaker does, so nothing it says about the registry's host can be judged against it.
+        return {**result, "verdict": "unjudged",
+                "reason": "the service address given is a loopback address, which no speakers "
+                          "use; pass the address the speakers call back to"}
     if set(advertised) != {"TUNEIN", "LOCAL_INTERNET_RADIO"}:
         return {**result, "verdict": "unreadable"}
     origins = {_origin(url) for url in advertised.values()}

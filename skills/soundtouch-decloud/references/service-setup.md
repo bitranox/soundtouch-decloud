@@ -104,7 +104,9 @@ themselves look correctly migrated. After any such copy, and after every address
 uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
 ```
 
-It exits 1 and names `settings.json` when the registry advertises another address. After
+It exits 1 and names `settings.json` when the registry advertises another address. Give it the
+address the SPEAKERS use: run with `127.0.0.1` or `localhost` it reports the registry as `unjudged`,
+because a loopback address says nothing about which host the speakers should be sent to. After
 correcting it, reboot every speaker: a speaker reads the registry when it starts, so until then it
 keeps using the old address even though `health` already says ok.
 

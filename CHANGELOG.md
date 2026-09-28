@@ -7,6 +7,16 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.9.2] 2026-09-29
+
+### Fixed
+
+- **`health` no longer calls a correct registry foreign when given a loopback address.** Run on
+  the service's own machine as `--service http://127.0.0.1:8000`, it compared the registry's
+  host with `127.0.0.1` and said `foreign`. A loopback address names no host a speaker uses, so
+  the registry is now reported `unjudged` with the reason, and the service itself still counts
+  as healthy. Reproduced on a real registry before the fix.
+
 ## [1.9.1] 2026-09-29
 
 From converting three installs to the relative form.

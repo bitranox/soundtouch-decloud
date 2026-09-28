@@ -498,3 +498,15 @@ def test_no_header_or_an_unreadable_one_reads_unknown():
         state = C.clock_state(header, now=NOW)
         assert state["verdict"] == "unknown"
         assert state["reading"] is None
+
+
+@pytest.mark.parametrize("service", ["http://127.0.0.1:8000", "http://localhost:8000",
+                                     "http://127.0.1.1:8000", "http://[::1]:8000"])
+def test_a_loopback_service_address_cannot_judge_the_registry(service):
+    """Run on the service's own machine, the address given names no host a speaker could use.
+
+    Comparing against it called a correct registry foreign; not knowing is not a fault.
+    """
+    verdict = C.registry_verdict(service, _registry())
+    assert verdict["verdict"] == "unjudged"
+    assert "speakers" in str(verdict["reason"])

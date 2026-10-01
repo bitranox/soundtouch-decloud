@@ -160,10 +160,15 @@ Two older forms play too, and every script here still reads them:
   --service <url>` still writes it, for a speaker whose firmware cannot resolve the relative form:
   that is verified upstream on firmware 27.0.6 only, so try one button on older firmware first.
 - `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`, written by this skill
-  before 1.8.0 and by some of the service's own playback paths.
+  before 1.8.0, by some of the service's own playback paths, and by the player's older catalog
+  entries: AfterTouch v0.138.1 lists some stations twice with no hint of the form, and the older
+  entry writes this one. It names the host too, so `relativize` converts it as well, rebuilding
+  the relative form from the stream its base64 carries.
 
 `check` reads all three, and a bare stream URL, by the stream they stand for rather than by the
-string, so a button stored in either Orion form counts as correct.
+string, so a button stored in either Orion form counts as correct. `check` and `restore` also list
+the buttons whose location names the service's address under `host_bound`, with a `warning`; that
+does not change the exit code, because the station on those buttons is right.
 
 Wrong, and accepted at write time:
 
@@ -246,10 +251,10 @@ uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <speaker
 uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> --template <speaker>.json --confirm
 ```
 
-### Converting absolute presets to the relative form
+### Converting host-bound presets to the relative form
 
 Presets saved before AfterTouch v0.138.0 (or by this skill before 1.9.0) name the service's
-address. `relativize` stores each such button again in the relative form - same station, name,
+address, and so does any button holding the legacy `/custom/v1/playback` form. `relativize` stores each such button again in the relative form - same station, name,
 picture and button - after backing the speaker's presets up. Without `--confirm` it only lists the
 buttons it would change:
 

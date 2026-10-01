@@ -191,6 +191,55 @@ def test_relativize_refuses_to_write_before_the_radio_source_is_mounted(monkeypa
     assert "mounted" in json.loads(capsys.readouterr().out)["data"]["error"]
 
 
+LEGACY_STREAM = "https://radio.example.com/stream"
+LEGACY = (f"http://192.0.2.10:8000{C.PLAYBACK_PATH}"
+          f"{__import__('base64').urlsafe_b64encode(LEGACY_STREAM.encode()).decode()}?name=A")
+
+
+def test_relativize_rewrites_a_legacy_playback_slot(monkeypatch, tmp_path, capsys):
+    speaker = FakeSpeaker(LEGACY)
+    _fake(monkeypatch, speaker)
+    rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert rc == 0, data
+    assert data["rewrote"] == [3]
+    assert speaker.location == C.orion_location(LEGACY_STREAM, "A")
+
+
+def _check(monkeypatch, tmp_path, capsys, location: str) -> tuple[int, dict]:
+    _fake(monkeypatch, FakeSpeaker(location))
+    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    rc = P.main(["check", "--ip", "192.0.2.31", "--template", _write(tmp_path, template)])
+    return rc, json.loads(capsys.readouterr().out)["data"]
+
+
+@pytest.mark.parametrize("location", [
+    LEGACY, C.orion_location(LEGACY_STREAM, "A", service="http://192.0.2.10:8000")])
+def test_check_warns_on_a_host_bound_slot_and_still_passes(monkeypatch, tmp_path, capsys, location):
+    """The station is right, so the check passes; the host in the location is what is wrong."""
+    rc, data = _check(monkeypatch, tmp_path, capsys, location)
+    assert rc == 0, data
+    assert data["host_bound"] == [3]
+    assert "relativize" in data["warning"]
+
+
+def test_restore_says_already_correct_but_names_a_host_bound_slot(monkeypatch, tmp_path, capsys):
+    """restore compares streams, so it writes nothing here; it must still say what it saw."""
+    _fake(monkeypatch, FakeSpeaker(LEGACY))
+    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template),
+                 "--confirm"])
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert rc == 0 and data["wrote"] == 0
+    assert data["host_bound"] == [3] and "relativize" in data["warning"]
+
+
+def test_check_has_no_warning_for_a_relative_slot(monkeypatch, tmp_path, capsys):
+    rc, data = _check(monkeypatch, tmp_path, capsys, C.orion_location(LEGACY_STREAM, "A"))
+    assert rc == 0, data
+    assert data["host_bound"] == [] and "warning" not in data
+
+
 def test_restore_writes_the_relative_form(monkeypatch, tmp_path, capsys):
     speaker = FakeSpeaker("https://old.example.com/gone")
     _fake(monkeypatch, speaker)

@@ -7,6 +7,23 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.0] 2026-10-01
+
+### Changed
+
+- **`relativize` also converts the legacy `/custom/v1/playback` form.** The AfterTouch player
+  (v0.138.1) lists some stations twice in its preset catalog, and the older entry writes this
+  host-bound form, which stops playing once the service moves. `relativize` rebuilds the relative
+  Orion form from the stream URL its base64 carries, keeping the slot's name and art; a location
+  that does not decode is left alone. Reported upstream as gesellix/Bose-SoundTouch#784.
+
+### Added
+
+- **`check` and `restore` name host-bound buttons.** Both compare streams, so a button holding
+  the right station in a form that names the service's address read as plainly correct. They now
+  list such buttons under `host_bound` with a `warning` pointing at `relativize`; the exit code is
+  unchanged, because the station is right.
+
 ## [1.9.2] 2026-09-29
 
 ### Fixed

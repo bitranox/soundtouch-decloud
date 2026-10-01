@@ -308,16 +308,46 @@ def _raw_presets(*items: tuple[int, str, str]) -> str:
         for button, source, location in items) + "</presets>"
 
 
-def test_relativize_plan_rewrites_only_absolute_orion_radio_slots():
+def test_relativize_plan_rewrites_only_host_bound_radio_slots():
     absolute = C.orion_location("https://a.example.com/s?x=1&y=2", "A", service=SERVICE)
     raw = _raw_presets((1, "LOCAL_INTERNET_RADIO", absolute),
                        (2, "LOCAL_INTERNET_RADIO", C.orion_location("https://b.example.com/s", "B")),
                        (3, "LOCAL_INTERNET_RADIO", _legacy("https://c.example.com/s")),
-                       (4, "TUNEIN", "/v1/playback/station/s12345"))
+                       (4, "TUNEIN", "/v1/playback/station/s12345"),
+                       (5, "TUNEIN", _legacy("https://d.example.com/s")))
     plan = C.relativize_plan(raw)
-    assert [step["button"] for step in plan] == [1]
+    assert [step["button"] for step in plan] == [1, 3]
     assert plan[0]["old"] == absolute
     assert plan[0]["new"] == C.orion_location("https://a.example.com/s?x=1&y=2", "A")
+
+
+def test_relativize_plan_turns_a_legacy_playback_slot_into_the_relative_orion_form():
+    """The player's older catalog entry still writes this host-bound form (gesellix #784).
+
+    The stream sits in the base64, so nothing is lost: the new blob carries the slot's own name
+    and art, which is what the speaker shows for the button.
+    """
+    stream = "https://c.example.com/s?x=1&y=2"
+    plan = C.relativize_plan(_raw_presets((3, "LOCAL_INTERNET_RADIO", _legacy(stream))))
+    assert [step["button"] for step in plan] == [3]
+    assert plan[0]["new"] == C.orion_location(stream, "Name 3 & Co",
+                                              image_url="https://img.example.com/3.png")
+    assert C.stream_url_from_location(str(plan[0]["new"])) == stream
+    assert SERVICE not in str(plan[0]["body"])
+
+
+def test_relativize_plan_names_a_legacy_slot_from_its_location_when_the_item_has_none():
+    location = _legacy("https://c.example.com/s").replace("?name=S", "?name=Radio+%26+Co")
+    raw = (f'<presets><preset id="2"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
+           f'location="{location}" /></preset></presets>')
+    plan = C.relativize_plan(raw)
+    assert plan[0]["new"] == C.orion_location("https://c.example.com/s", "Radio & Co")
+
+
+def test_relativize_plan_leaves_an_undecodable_legacy_slot_alone():
+    """Rewriting what cannot be read back would turn a working button into an empty station."""
+    raw = _raw_presets((3, "LOCAL_INTERNET_RADIO", f"{SERVICE}{C.PLAYBACK_PATH}%%%?name=S"))
+    assert C.relativize_plan(raw) == []
 
 
 def test_relativize_plan_keeps_everything_but_the_location():

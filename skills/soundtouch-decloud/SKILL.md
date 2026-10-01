@@ -107,13 +107,13 @@ checker that needs the missing tool is no checker at all.
 Each prints a JSON envelope; exit 0 yes, 1 no, 2 error. Anything that CHANGES a speaker requires
 `--confirm`, so the read half is always safe to run.
 
-| Script                    | Use it to                                                                                                                                       |
-|---------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                    |
-| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                                                                         |
-| `soundtouch_find.py`      | Discover speakers and report what state each is in                                                                                              |
-| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                                                                |
-| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert absolute presets to the relative form |
+| Script                    | Use it to                                                                                                                                         |
+|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                      |
+| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                                                                           |
+| `soundtouch_find.py`      | Discover speakers and report what state each is in                                                                                                |
+| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                                                                  |
+| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert host-bound presets to the relative form |
 
 ## When it does not work
 

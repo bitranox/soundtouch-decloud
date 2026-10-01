@@ -12,7 +12,8 @@
 
 Presets are written in the relative Orion form, which follows the service to a new address;
 --absolute writes the host in, for firmware that cannot resolve a relative location. `relativize`
-stores every absolute Orion preset on a speaker again in the relative form.
+stores every host-bound preset on a speaker (absolute Orion, or the legacy /custom/v1/playback form)
+again in the relative form; `check` and `restore` name those buttons under "host_bound".
 Nothing is written without --confirm.
 Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
 """
@@ -295,10 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check":
         return emit(not todo, {"wanted": len(presets), "missing": len(todo),
                                "missing_streams": [p["location"] for p in todo],
-                               "buttons": [p["buttonNumber"] for p in todo]})
+                               "buttons": [p["buttonNumber"] for p in todo],
+                               **_host_bound_report(current)})
 
     if not todo:
-        return emit(True, {"wrote": 0, "note": "already correct"})
+        return emit(True, {"wrote": 0, "note": "already correct", **_host_bound_report(current)})
     if not radio_ready(args.ip):
         return emit(False, {"error": "the radio source is not mounted yet, so a write would be "
                                      "silently undone. Wait about 80 seconds after a restart."})
@@ -321,8 +323,22 @@ def main(argv: list[str] | None = None) -> int:
                             "sharing": SHARING_NOTE})
 
 
+def _host_bound_report(current: str) -> dict[str, object]:
+    """Which buttons name the service's address, as a warning that does not fail the check.
+
+    The station on such a button is right, so the check passes; it is the location that stops
+    playing once the service moves, and `relativize` is what fixes it.
+    """
+    buttons = [step["button"] for step in relativize_plan(current)]
+    if not buttons:
+        return {"host_bound": []}
+    return {"host_bound": buttons,
+            "warning": f"buttons {buttons} name the service's address and stop playing when it "
+                       f"moves; `relativize` stores them again in the relative form"}
+
+
 def _relativize(ip: str, outdir: str, *, confirm: bool, emit) -> int:  # noqa: ANN001 - main's closure
-    """Store every absolute Orion preset on this speaker again in the relative form.
+    """Store every host-bound preset on this speaker again in the relative form.
 
     The same station, name, art and button; only the location loses its host, so the preset follows
     the service instead of naming the address it had when it was saved. AfterTouch's Health page
@@ -334,7 +350,7 @@ def _relativize(ip: str, outdir: str, *, confirm: bool, emit) -> int:  # noqa: A
         return emit(False, {"error": str(exc)}, code=2)
     buttons = [step["button"] for step in plan]
     if not plan:
-        return emit(True, {"rewrote": [], "note": "every Orion preset is already relative"})
+        return emit(True, {"rewrote": [], "note": "no radio preset names the service's address"})
     if not confirm:
         return emit(False, {"would_rewrite": buttons, "note": "re-run with --confirm to write these",
                             "sharing": SHARING_NOTE})

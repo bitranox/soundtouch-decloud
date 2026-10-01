@@ -235,13 +235,34 @@ def relative_orion_location(location: str) -> str:
     return ORION_STATION_PATH + (f"?{parsed.query}" if parsed.query else "")
 
 
-def relativize_plan(raw: str) -> list[dict[str, object]]:
-    """Which buttons hold an ABSOLUTE Orion location, and the storePreset body that fixes each.
+def _relative_location(item: ET.Element) -> str:
+    """The relative Orion form for one radio slot, or "" if it has none or already holds it.
 
-    The body carries the slot's ContentItem exactly as the speaker reported it - name, art, source,
-    type, account - with only the location swapped for its relative form, so the station, its
-    picture and its button are what they were. Only LOCAL_INTERNET_RADIO is touched: a TuneIn or
-    Spotify location is not an Orion station however it is spelled.
+    An absolute Orion location loses its host, the blob untouched. A legacy /custom/v1/playback
+    location, which the player's older catalog entries still write, is rebuilt from the stream URL
+    its base64 carries, named and pictured as the slot already is; one that does not decode is
+    left alone, since rewriting it would store a station with no stream.
+    """
+    old = item.get("location", "")
+    stream = decode_playback_location(old)
+    if stream:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(old).query)
+        name = (item.findtext("itemName") or "").strip() or query.get("name", [""])[0]
+        image = (item.findtext("containerArt") or "").strip()
+        return orion_location(stream, name, image_url=image)
+    new = relative_orion_location(old)
+    return "" if new == old else new
+
+
+def relativize_plan(raw: str) -> list[dict[str, object]]:
+    """Which buttons hold a HOST-BOUND radio location, and the storePreset body that fixes each.
+
+    Host-bound means an absolute Orion location or a legacy /custom/v1/playback one: both name the
+    service's address, so the button stops playing when the service moves. The body carries the
+    slot's ContentItem exactly as the speaker reported it - name, art, source, type, account - with
+    only the location swapped for its relative form, so the station, its picture and its button are
+    what they were. Only LOCAL_INTERNET_RADIO is touched: a TuneIn or Spotify location is not an
+    Orion station however it is spelled.
     """
     try:
         root = ET.fromstring(raw)  # noqa: S314 - the speaker's own /presets on the LAN
@@ -253,8 +274,8 @@ def relativize_plan(raw: str) -> list[dict[str, object]]:
         if item is None or item.get("source") != "LOCAL_INTERNET_RADIO":
             continue
         old = item.get("location", "")
-        new = relative_orion_location(old)
-        if not new or new == old:
+        new = _relative_location(item)
+        if not new:
             continue
         item.set("location", new)
         body = f'<preset id="{preset.get("id")}">{ET.tostring(item, encoding="unicode")}</preset>'

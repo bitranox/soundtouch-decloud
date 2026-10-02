@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ import soundtouch_find as F
 import soundtouch_onboard as O
 import soundtouch_presets as P
 import soundtouch_service as S
-from soundtouch_core import TelnetReply
+from soundtouch_core import TelnetReply, json_object
 
 SCRIPTS = {"soundtouch_find.py": F, "soundtouch_service.py": S,
            "soundtouch_presets.py": P, "soundtouch_onboard.py": O}
@@ -80,12 +81,59 @@ def _envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
     return body
 
 
+def _data(body: dict[str, object]) -> dict[str, object]:
+    """The envelope's `data` object, narrowed so a test can index it under strict typing."""
+    data = json_object(body["data"])
+    assert data is not None, body
+    return data
+
+
+def _registry_verdict(body: dict[str, object]) -> object:
+    registry = json_object(_data(body)["registry"])
+    assert registry is not None, body
+    return registry["verdict"]
+
+
+def _no_port(*_a: object, **_k: object) -> bool:
+    return False
+
+
+def _port_answers(answers: list[bool]) -> Callable[..., bool]:
+    """A stand-in for port_open that gives the next canned answer on each call."""
+    replies = iter(answers)
+
+    def port_open(*_a: object, **_k: object) -> bool:
+        return next(replies)
+
+    return port_open
+
+
+def _wait_up_at_once(*_a: object, **_k: object) -> float:
+    return 1.0
+
+
+def _no_sleep(_s: float) -> None:
+    return None
+
+
+def _no_account(_ip: str) -> str:
+    return ""
+
+
+def _account_4376872(_ip: str) -> str:
+    return "4376872"
+
+
+def _which_nothing(_name: str) -> None:
+    return None
+
+
 def test_render_prints_a_json_envelope_not_bare_yaml(capsys: pytest.CaptureFixture[str]) -> None:
     """SKILL.md says every script prints a JSON envelope, render included: the YAML is a field."""
     rc = S.main(["render", "--host", "192.0.2.10"])
     body = _envelope(capsys)
     assert rc == 0 and body["ok"] is True
-    assert "network_mode: host" in str(body["data"]["compose"])  # type: ignore[index]
+    assert "network_mode: host" in str(_data(body)["compose"])
 
 
 def test_render_writes_the_file_and_still_reports_json(tmp_path: Path,
@@ -107,7 +155,7 @@ def test_a_refused_address_exits_2_and_still_prints_json(capsys: pytest.CaptureF
 def test_docker_missing_is_a_no_not_an_error(monkeypatch: pytest.MonkeyPatch,
                                              capsys: pytest.CaptureFixture[str]) -> None:
     """A machine without Docker is the case the walkthrough exists to fix, so it exits 1."""
-    monkeypatch.setattr(S.shutil, "which", lambda _: None)
+    monkeypatch.setattr(S.shutil, "which", _which_nothing)
     rc = S.main(["check-docker"])
     body = _envelope(capsys)
     assert rc == 1 and body["ok"] is False
@@ -182,8 +230,8 @@ def test_enable_ssh_on_an_unpaired_speaker_refuses_with_an_envelope(
     rides a value an unpaired speaker never reads. Both network edges are substituted: a speaker
     with SSH already open returns early, and a reachable one is what makes this path unreachable.
     """
-    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: False)
-    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "port_open", _no_port)
+    monkeypatch.setattr(O, "account_uuid", _no_account)
     rc = O.main(["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000",
                  "enable-ssh", "--confirm"])
     body = _envelope(capsys)
@@ -197,12 +245,11 @@ def _accepted(_ip: str, commands: list[str]) -> list[TelnetReply]:
 
 
 def _stub_speaker(monkeypatch: pytest.MonkeyPatch, answers: list[bool]) -> None:
-    monkeypatch.setattr(O, "account_uuid", lambda _ip: "4376872")
+    monkeypatch.setattr(O, "account_uuid", _account_4376872)
     monkeypatch.setattr(O, "telnet_run", _accepted)
-    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
-    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
-    replies = iter(answers)
-    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+    monkeypatch.setattr(O, "wait_up", _wait_up_at_once)
+    monkeypatch.setattr(O.time, "sleep", _no_sleep)
+    monkeypatch.setattr(O, "port_open", _port_answers(answers))
 
 
 ENABLE = ["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000", "enable-ssh", "--confirm"]
@@ -214,7 +261,7 @@ def test_enable_ssh_waits_for_sshd_instead_of_taking_one_reading(
     _stub_speaker(monkeypatch, [False, False, False, True])  # first answer is the already-open guard
     rc = O.main(ENABLE)
     body = _envelope(capsys)
-    assert rc == 0 and body["ok"] is True and body["data"]["ssh_open"] is True
+    assert rc == 0 and body["ok"] is True and _data(body)["ssh_open"] is True
 
 
 def test_a_stored_write_pending_a_reboot_is_a_question_not_a_failure(
@@ -229,7 +276,7 @@ def test_a_stored_write_pending_a_reboot_is_a_question_not_a_failure(
     rc = O.main(ENABLE)
     body = _envelope(capsys)
     assert rc == 2 and body["ok"] is False
-    assert "reboot" in str(body["data"]["next"]).lower()
+    assert "reboot" in str(_data(body)["next"]).lower()
 
 
 def test_the_full_form_reboots_itself_so_a_closed_port_is_a_definite_no(
@@ -240,7 +287,7 @@ def test_the_full_form_reboots_itself_so_a_closed_port_is_a_definite_no(
     rc = O.main([*ENABLE, "--full-config"])
     body = _envelope(capsys)
     assert rc == 1 and body["ok"] is False
-    assert "serial" in str(body["data"]["next"]).lower()
+    assert "serial" in str(_data(body)["next"]).lower()
 
 
 def test_a_redirect_ends_the_command_but_a_placeholder_argument_does_not() -> None:
@@ -256,8 +303,8 @@ def test_a_redirect_ends_the_command_but_a_placeholder_argument_does_not() -> No
 def test_enable_ssh_refuses_an_empty_account_unless_the_bypass_is_given(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The refusal must name the bypass, or the one firmware that needs it reads as unsupported."""
-    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: False)
-    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "port_open", _no_port)
+    monkeypatch.setattr(O, "account_uuid", _no_account)
     rc = O.main(["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000",
                  "enable-ssh", "--confirm"])
     body = _envelope(capsys)
@@ -272,29 +319,27 @@ def test_assume_paired_proceeds_on_a_speaker_that_reports_no_account(
     Without the bypass the command exits 2 and writes nothing, so the device is unreachable by
     the documented route for a reason that is not true of it.
     """
-    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "account_uuid", _no_account)
     monkeypatch.setattr(O, "telnet_run", _accepted)
-    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
-    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
-    replies = iter([False, True])
-    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+    monkeypatch.setattr(O, "wait_up", _wait_up_at_once)
+    monkeypatch.setattr(O.time, "sleep", _no_sleep)
+    monkeypatch.setattr(O, "port_open", _port_answers([False, True]))
     rc = O.main([*ENABLE, "--assume-paired"])
     body = _envelope(capsys)
     assert rc == 0
-    assert body["data"]["ssh_open"] is True
+    assert _data(body)["ssh_open"] is True
 
 
 def test_a_bypassed_precondition_is_recorded_in_the_envelope(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A run that skipped a safety check must say so, or a reader cannot tell it from a clean one."""
-    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    monkeypatch.setattr(O, "account_uuid", _no_account)
     monkeypatch.setattr(O, "telnet_run", _accepted)
-    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
-    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
-    replies = iter([False, True])
-    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+    monkeypatch.setattr(O, "wait_up", _wait_up_at_once)
+    monkeypatch.setattr(O.time, "sleep", _no_sleep)
+    monkeypatch.setattr(O, "port_open", _port_answers([False, True]))
     O.main([*ENABLE, "--assume-paired"])
-    assert "precondition_bypassed" in _envelope(capsys)["data"]
+    assert "precondition_bypassed" in _data(_envelope(capsys))
 
 
 def test_a_paired_speaker_records_no_bypass(
@@ -302,7 +347,7 @@ def test_a_paired_speaker_records_no_bypass(
     """The control: the marker must not appear on an ordinary run, or it means nothing."""
     _stub_speaker(monkeypatch, [False, True])
     O.main([*ENABLE, "--assume-paired"])
-    assert "precondition_bypassed" not in _envelope(capsys)["data"]
+    assert "precondition_bypassed" not in _data(_envelope(capsys))
 
 
 def _service(monkeypatch: pytest.MonkeyPatch, registry_host: str | None) -> None:
@@ -324,7 +369,7 @@ def test_health_is_ok_when_the_registry_names_the_service(
     _service(monkeypatch, "http://192.0.2.10:8000")
     rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
     body = _envelope(capsys)
-    assert rc == 0 and body["data"]["registry"]["verdict"] == "ok"  # type: ignore[index]
+    assert rc == 0 and _registry_verdict(body) == "ok"
 
 
 def test_health_is_a_no_when_the_registry_names_another_host(
@@ -334,8 +379,8 @@ def test_health_is_a_no_when_the_registry_names_another_host(
     rc = S.main(["health", "--service", "http://192.0.2.10:8000"])
     body = _envelope(capsys)
     assert rc == 1 and body["ok"] is False
-    assert "settings.json" in str(body["data"]["next"])  # type: ignore[index]
-    assert "reboot every speaker" in str(body["data"]["next"])  # type: ignore[index]
+    assert "settings.json" in str(_data(body)["next"])
+    assert "reboot every speaker" in str(_data(body)["next"])
 
 
 def test_health_cannot_answer_without_the_registry(
@@ -351,4 +396,4 @@ def test_health_on_a_loopback_address_does_not_call_the_registry_foreign(
     _service(monkeypatch, "http://192.0.2.10:8000")
     rc = S.main(["health", "--service", "http://127.0.0.1:8000"])
     body = _envelope(capsys)
-    assert rc == 0 and body["data"]["registry"]["verdict"] == "unjudged"  # type: ignore[index]
+    assert rc == 0 and _registry_verdict(body) == "unjudged"

@@ -170,6 +170,14 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
+The scripts and their tests are typed to pyright's strict mode. `pyrightconfig.json` at the root
+names what it checks, so the command takes no paths:
+
+```bash
+python -m pip install pyright
+pyright
+```
+
 `scripts/check_repo.py` checks the repo's own conventions: the manifests agree with the directory
 they describe, the skill's frontmatter is the shape the router needs, every shipped script is
 named by a test, and nothing arrived with CRLF or a typographic character (em-dash, curly quote,

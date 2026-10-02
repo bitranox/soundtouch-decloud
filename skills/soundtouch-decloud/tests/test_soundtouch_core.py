@@ -5,6 +5,7 @@ written against the payload shape the speaker actually returns rather than a tid
 """
 import base64
 import json
+from collections.abc import Callable
 
 import pytest
 import soundtouch_core as C
@@ -130,7 +131,7 @@ SERVICE = "http://192.0.2.10:8000"
 # absolute one, which is byte-identical to what BuildOrionLocation wrote at v0.137.1. Byte equality
 # is the point: the player compares, catalogues and shares what it stores, so a location that
 # decodes the same but is spelled differently is a second format.
-ORION_ABSOLUTE_GOLDEN = [
+ORION_ABSOLUTE_GOLDEN: list[tuple[tuple[str, str, str], str]] = [
     (("Example Radio", "", "https://radio.example.com/live.mp3"),
      "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data="
      "eyJuYW1lIjoiRXhhbXBsZSBSYWRpbyIsImltYWdlVXJsIjoiIiwic3RyZWFtVXJsIjoiaHR0cHM6Ly9yYWRpby5leGFtc"
@@ -163,20 +164,22 @@ def test_the_relative_golden_values_are_upstreams():
 
 
 @pytest.mark.parametrize(("args", "expected"), ORION_RELATIVE_GOLDEN)
-def test_orion_location_writes_the_relative_form_byte_identical_to_upstream(args, expected):
+def test_orion_location_writes_the_relative_form_byte_identical_to_upstream(
+        args: tuple[str, str, str], expected: str) -> None:
     name, image, stream = args
     assert C.orion_location(stream, name, image_url=image) == expected
 
 
 @pytest.mark.parametrize(("args", "expected"), ORION_ABSOLUTE_GOLDEN)
-def test_orion_location_writes_the_absolute_form_only_when_given_a_service(args, expected):
+def test_orion_location_writes_the_absolute_form_only_when_given_a_service(
+        args: tuple[str, str, str], expected: str) -> None:
     name, image, stream = args
     assert C.orion_location(stream, name, image_url=image, service=SERVICE) == expected
 
 
 @pytest.mark.parametrize(("args", "_expected"), ORION_ABSOLUTE_GOLDEN)
 @pytest.mark.parametrize("service", ["", SERVICE])
-def test_orion_location_round_trips(args, _expected, service):
+def test_orion_location_round_trips(args: tuple[str, str, str], _expected: str, service: str) -> None:
     name, image, stream = args
     location = C.orion_location(stream, name, image_url=image, service=service)
     assert C.stream_url_from_location(location) == stream
@@ -198,12 +201,13 @@ def test_orion_location_tolerates_a_trailing_slash_on_the_service():
     ("", ""),
     ("https://radio.example.com/live.mp3", ""),
 ])
-def test_relative_orion_location_matches_upstream(location, expected):
+def test_relative_orion_location_matches_upstream(location: str, expected: str) -> None:
     assert C.relative_orion_location(location) == expected
 
 
 @pytest.mark.parametrize(("args", "expected"), ORION_ABSOLUTE_GOLDEN)
-def test_any_host_absolute_form_relativizes_to_the_upstream_relative_form(args, expected):
+def test_any_host_absolute_form_relativizes_to_the_upstream_relative_form(
+        args: tuple[str, str, str], expected: str) -> None:
     rel = dict(ORION_RELATIVE_GOLDEN)[args]
     assert C.relative_orion_location(expected) == rel
     assert C.relative_orion_location(expected.replace(SERVICE, "https://content.api.bose.io")) == rel
@@ -225,13 +229,16 @@ def test_decode_ignores_a_raw_stream_url():
     assert C.decode_playback_location("https://radio.example.com/stream") == ""
 
 
-def _speaker_presets(*slots: tuple[int, str], form=None) -> str:
+def _speaker_presets(*slots: tuple[int, str], form: Callable[[str], str] | None = None) -> str:
     """The shape /presets really returns: each ContentItem inside a <preset id="N"> wrapper.
 
     By default every slot holds what this skill now writes. `form` swaps in another builder, for
     a slot the player wrote or one left behind by an older version of this skill.
     """
-    build = form or (lambda stream: C.orion_location(stream, "S"))
+    def default_form(stream: str) -> str:
+        return C.orion_location(stream, "S")
+
+    build = form or default_form
     return "<presets>" + "".join(
         f'<preset id="{button}"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
         f'location="{build(stream)}" /></preset>'
@@ -244,8 +251,9 @@ def test_a_slot_the_player_wrote_counts_as_correct():
     Reading only our own old wrapping made `check` exit 1 forever for these and made `restore`
     rewrite the owner's buttons on every run.
     """
-    player = lambda stream: C.orion_location(stream, "Player",  # noqa: E731
-                                             service="http://aftertouch.example:8000")
+    def player(stream: str) -> str:
+        return C.orion_location(stream, "Player", service="http://aftertouch.example:8000")
+
     wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s")]
     assert C.slots_to_write(C.parse_presets(_speaker_presets((1, "https://a.example.com/s"), form=player)), wanted) == []
 
@@ -257,7 +265,9 @@ def test_a_slot_in_the_legacy_form_counts_as_correct():
 
 def test_relative_and_absolute_slots_side_by_side_both_count_as_correct():
     """The state every install passes through while it converts: some buttons each way."""
-    absolute = lambda stream: C.orion_location(stream, "S", service=SERVICE)  # noqa: E731
+    def absolute(stream: str) -> str:
+        return C.orion_location(stream, "S", service=SERVICE)
+
     raw = _speaker_presets((1, "https://a.example.com/s")).replace("</presets>", "") + \
         _speaker_presets((2, "https://b.example.com/s"), form=absolute).replace("<presets>", "")
     wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s"),
@@ -303,7 +313,7 @@ def test_a_registry_on_the_bose_cloud_is_dns_mode_not_foreign():
 
 @pytest.mark.parametrize("body", ["", "not json", "[]", '{"bmx_services": []}',
                                   '{"bmx_services": [{"id": {"name": "TUNEIN"}}]}'])
-def test_an_unreadable_registry_says_so_rather_than_ok(body):
+def test_an_unreadable_registry_says_so_rather_than_ok(body: str) -> None:
     assert C.registry_verdict(SERVICE, body).verdict == RegistryVerdict.UNREADABLE
 
 
@@ -433,10 +443,10 @@ class _FakeSocket:
     def __init__(self, *chunks: bytes) -> None:
         self._chunks = list(chunks)
 
-    def settimeout(self, _timeout: float) -> None:
+    def settimeout(self, _timeout: float | None, /) -> None:
         return None
 
-    def recv(self, _size: int) -> bytes:
+    def recv(self, _size: int, /) -> bytes:
         if not self._chunks:
             raise TimeoutError
         return self._chunks.pop(0)
@@ -541,7 +551,7 @@ def test_no_header_or_an_unreadable_one_reads_unknown():
 
 @pytest.mark.parametrize("service", ["http://127.0.0.1:8000", "http://localhost:8000",
                                      "http://127.0.1.1:8000", "http://[::1]:8000"])
-def test_a_loopback_service_address_cannot_judge_the_registry(service):
+def test_a_loopback_service_address_cannot_judge_the_registry(service: str) -> None:
     """Run on the service's own machine, the address given names no host a speaker could use.
 
     Comparing against it called a correct registry foreign; not knowing is not a fault.

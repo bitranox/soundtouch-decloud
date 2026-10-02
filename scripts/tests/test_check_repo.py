@@ -29,7 +29,7 @@ description: Use when demonstrating the gate.
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: pathlib.Path) -> pathlib.Path:
     """A minimal repo of the shape this gate expects, passing every check."""
     (tmp_path / ".claude-plugin").mkdir()
     (tmp_path / ".claude-plugin" / "plugin.json").write_text(json.dumps(
@@ -45,58 +45,58 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_the_fixture_passes_every_check(repo):
+def test_the_fixture_passes_every_check(repo: pathlib.Path) -> None:
     """The control: without this, a failing test below could just mean the fixture is malformed."""
     assert G.run_checks(repo) == []
 
 
 # --- manifests ----------------------------------------------------------------------------------
 
-def test_a_version_that_is_not_semver_is_caught(repo):
+def test_a_version_that_is_not_semver_is_caught(repo: pathlib.Path) -> None:
     path = repo / ".claude-plugin" / "plugin.json"
     path.write_text(json.dumps({"name": repo.name, "version": "1.0"}), encoding="utf-8", newline="\n")
     assert any("not X.Y.Z" in f for f in G.check_manifests(repo))
 
 
-def test_manifests_naming_different_plugins_are_caught(repo):
+def test_manifests_naming_different_plugins_are_caught(repo: pathlib.Path) -> None:
     path = repo / ".claude-plugin" / "marketplace.json"
     path.write_text(json.dumps({"plugins": [{"name": "something-else"}]}), encoding="utf-8", newline="\n")
     assert any("marketplace.json lists" in f for f in G.check_manifests(repo))
 
 
-def test_a_plugin_name_that_is_not_the_repo_dir_is_caught(repo):
+def test_a_plugin_name_that_is_not_the_repo_dir_is_caught(repo: pathlib.Path) -> None:
     path = repo / ".claude-plugin" / "plugin.json"
     path.write_text(json.dumps({"name": "elsewhere", "version": "1.0.0"}), encoding="utf-8", newline="\n")
     assert any("is not the repo dir" in f for f in G.check_manifests(repo))
 
 
-def test_unparseable_json_is_a_failure_not_a_traceback(repo):
+def test_unparseable_json_is_a_failure_not_a_traceback(repo: pathlib.Path) -> None:
     (repo / ".claude-plugin" / "plugin.json").write_text("{not json", encoding="utf-8", newline="\n")
     assert G.check_manifests(repo)
 
 
 # --- the skill ------------------------------------------------------------------------------------
 
-def test_a_skill_name_that_is_not_its_directory_is_caught(repo):
+def test_a_skill_name_that_is_not_its_directory_is_caught(repo: pathlib.Path) -> None:
     skill = repo / "skills" / "demo-skill" / "SKILL.md"
     skill.write_text(SKILL.replace("demo-skill", "other-name", 1), encoding="utf-8", newline="\n")
     assert any("is not its dir" in f for f in G.check_skill(repo))
 
 
-def test_a_description_that_does_not_start_with_use_when_is_caught(repo):
+def test_a_description_that_does_not_start_with_use_when_is_caught(repo: pathlib.Path) -> None:
     skill = repo / "skills" / "demo-skill" / "SKILL.md"
     skill.write_text(SKILL.replace("Use when demonstrating", "Demonstrates"), encoding="utf-8", newline="\n")
     assert any("must start with 'Use when'" in f for f in G.check_skill(repo))
 
 
-def test_an_over_long_description_is_caught(repo):
+def test_an_over_long_description_is_caught(repo: pathlib.Path) -> None:
     skill = repo / "skills" / "demo-skill" / "SKILL.md"
     skill.write_text(SKILL.replace("the gate.", "the gate " + "x" * G.DESCRIPTION_MAX),
                      encoding="utf-8", newline="\n")
     assert any("over 1024" in f for f in G.check_skill(repo))
 
 
-def test_a_second_skill_is_caught(repo):
+def test_a_second_skill_is_caught(repo: pathlib.Path) -> None:
     second = repo / "skills" / "another"
     second.mkdir()
     (second / "SKILL.md").write_text(SKILL, encoding="utf-8", newline="\n")
@@ -105,57 +105,57 @@ def test_a_second_skill_is_caught(repo):
 
 # --- tests exist ----------------------------------------------------------------------------------
 
-def test_a_script_no_test_names_is_caught(repo):
+def test_a_script_no_test_names_is_caught(repo: pathlib.Path) -> None:
     (repo / "skills" / "demo-skill" / "scripts" / "orphan.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
     assert any("named by no test" in f for f in G.check_tests_exist(repo))
 
 
 # --- line endings and typographic tells -------------------------------------------------------------
 
-def test_crlf_is_caught(repo):
+def test_crlf_is_caught(repo: pathlib.Path) -> None:
     (repo / "notes.md").write_bytes(b"line one\r\nline two\r\n")
     assert any("CRLF" in f for f in G.check_line_endings(repo))
 
 
 @pytest.mark.parametrize("point", [0x2014, 0x2019, 0x201C, 0x2026, 0x00A0, 0x200B, 0xFEFF])
-def test_each_banned_character_is_caught(repo, point):
+def test_each_banned_character_is_caught(repo: pathlib.Path, point: int) -> None:
     (repo / "notes.md").write_text("a" + chr(point) + "b", encoding="utf-8", newline="\n")
     assert any(f"U+{point:04X}" in f for f in G.check_no_typographic_tells(repo))
 
 
-def test_plain_ascii_prose_is_left_alone(repo):
+def test_plain_ascii_prose_is_left_alone(repo: pathlib.Path) -> None:
     """The negative control: the tell check must not fire on ordinary text."""
     (repo / "notes.md").write_text("A plain sentence - with a hyphen.\n", encoding="utf-8", newline="\n")
     assert G.check_no_typographic_tells(repo) == []
 
 
-def _git(repo, *args):
+def _git(repo: pathlib.Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
                    env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
 
 
 @pytest.fixture
-def git_repo(repo):
+def git_repo(repo: pathlib.Path) -> pathlib.Path:
     """The fixture as a git work tree, with one ignored directory, the shape a real clone has."""
     (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8", newline="\n")
     _git(repo, "init", "-q")
     return repo
 
 
-def test_a_gitignored_file_is_not_the_repo(git_repo):
+def test_a_gitignored_file_is_not_the_repo(git_repo: pathlib.Path) -> None:
     """A local tool's buffer in an ignored directory never ships, so it cannot fail the gate."""
     (git_repo / "scratch").mkdir()
     (git_repo / "scratch" / "now.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
     assert G.check_no_typographic_tells(git_repo) == []
 
 
-def test_a_new_file_not_yet_added_is_still_checked(git_repo):
+def test_a_new_file_not_yet_added_is_still_checked(git_repo: pathlib.Path) -> None:
     """The gate runs before a commit, so an untracked file that is not ignored is about to ship."""
     (git_repo / "notes.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
     assert any("notes.md" in f for f in G.check_no_typographic_tells(git_repo))
 
 
-def test_a_non_ascii_path_is_checked_not_skipped(git_repo):
+def test_a_non_ascii_path_is_checked_not_skipped(git_repo: pathlib.Path) -> None:
     """git quotes such a path unless asked not to, and a quoted path opens nothing."""
     (git_repo / "caf\u00e9.md").write_text("a" + chr(0x2014) + "b", encoding="utf-8", newline="\n")
     assert any("caf\u00e9.md" in f for f in G.check_no_typographic_tells(git_repo))
@@ -163,16 +163,16 @@ def test_a_non_ascii_path_is_checked_not_skipped(git_repo):
 
 # --- the real repo ----------------------------------------------------------------------------------
 
-def test_this_repo_passes_its_own_gate():
+def test_this_repo_passes_its_own_gate() -> None:
     assert G.run_checks(REPO) == []
 
 
-def test_main_returns_zero_on_the_real_repo(capsys):
+def test_main_returns_zero_on_the_real_repo(capsys: pytest.CaptureFixture[str]) -> None:
     assert G.main([str(REPO)]) == 0
     assert "all checks passed" in capsys.readouterr().out
 
 
-def test_main_returns_one_and_prints_each_problem(repo, capsys):
+def test_main_returns_one_and_prints_each_problem(repo: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / ".claude-plugin" / "plugin.json").write_text("{not json", encoding="utf-8", newline="\n")
     assert G.main([str(repo)]) == 1
     assert "FAIL" in capsys.readouterr().out

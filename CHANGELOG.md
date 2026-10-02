@@ -7,6 +7,27 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.4] 2026-10-02
+
+### Added
+
+- **`pyrightconfig.json`** checks the scripts, the skill's tests and `scripts/check_repo.py` in
+  pyright's strict mode, and all of them pass it; the README names the command. Decoded JSON is
+  narrowed with the new `json_object` and `json_list` in `soundtouch_core` rather than a bare
+  `isinstance`, which strict mode reads as a dict of unknown types.
+
+### Changed
+
+- `soundtouch_core.read_to_prompt` (with the `PromptSocket` protocol it reads from) and
+  `soundtouch_preflight.linux_family` are public; the tests exercise them as units.
+
+### Fixed
+
+- **`soundtouch_find.py --service` no longer stops with a traceback** when the service answers
+  with JSON that is not a list of devices; it answers with the error envelope and exit 2, like a
+  reply that is not JSON at all. Discovery through the service is now tested against a real HTTP
+  server.
+
 ## [1.10.3] 2026-10-02
 
 ### Changed

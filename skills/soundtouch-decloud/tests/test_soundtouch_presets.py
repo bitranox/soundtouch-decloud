@@ -1,44 +1,47 @@
 """Tests for template validation and the preset body that gets written."""
 import dataclasses
 import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import soundtouch_core as C
 import soundtouch_presets as P
 from soundtouch_core import PresetEntry
 
-GOOD = {"deviceId": "00005E005300", "name": "Example Speaker",
-        "presets": [{"buttonNumber": 1, "name": "Example Radio",
-                     "location": "https://radio.example.com/stream",
-                     "contentItemType": "stationurl", "source": "LOCAL_INTERNET_RADIO"}]}
+GOOD_PRESET = {"buttonNumber": 1, "name": "Example Radio",
+               "location": "https://radio.example.com/stream",
+               "contentItemType": "stationurl", "source": "LOCAL_INTERNET_RADIO"}
+GOOD = {"deviceId": "00005E005300", "name": "Example Speaker", "presets": [GOOD_PRESET]}
 # The first preset of GOOD, as the loader turns it into a typed entry.
 ENTRY = PresetEntry(button_number=1, name="Example Radio",
                     location="https://radio.example.com/stream")
 
 
-def _write(tmp_path, data):
+def _write(tmp_path: Path, data: object) -> str:
     path = tmp_path / "t.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return str(path)
 
 
-def test_a_good_template_loads(tmp_path):
+def test_a_good_template_loads(tmp_path: Path) -> None:
     assert P.load_template(_write(tmp_path, GOOD)) == [ENTRY]
 
 
-def test_a_template_with_no_presets_is_refused(tmp_path):
+def test_a_template_with_no_presets_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no presets"):
         P.load_template(_write(tmp_path, {"presets": []}))
 
 
-def test_a_missing_field_is_refused(tmp_path):
+def test_a_missing_field_is_refused(tmp_path: Path) -> None:
     bad = json.loads(json.dumps(GOOD))
     del bad["presets"][0]["location"]
     with pytest.raises(ValueError, match="location"):
         P.load_template(_write(tmp_path, bad))
 
 
-def test_a_duplicate_button_is_refused(tmp_path):
+def test_a_duplicate_button_is_refused(tmp_path: Path) -> None:
     """Two entries on one button silently means one of them is never written."""
     bad = json.loads(json.dumps(GOOD))
     bad["presets"].append(dict(bad["presets"][0]))
@@ -47,7 +50,7 @@ def test_a_duplicate_button_is_refused(tmp_path):
 
 
 @pytest.mark.parametrize("button", [0, 7, "1", None])
-def test_a_button_outside_one_to_six_is_refused(tmp_path, button):
+def test_a_button_outside_one_to_six_is_refused(tmp_path: Path, button: int | str | None) -> None:
     bad = json.loads(json.dumps(GOOD))
     bad["presets"][0]["buttonNumber"] = button
     with pytest.raises(ValueError, match="buttonNumber"):
@@ -59,7 +62,7 @@ def test_a_button_outside_one_to_six_is_refused(tmp_path, button):
     "http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=abc",
     "/station?data=abc",
 ])
-def test_an_already_wrapped_location_is_refused(tmp_path, wrapped):
+def test_an_already_wrapped_location_is_refused(tmp_path: Path, wrapped: str) -> None:
     """The script adds the adapter wrapping, so a pre-wrapped location would be double-wrapped."""
     bad = json.loads(json.dumps(GOOD))
     bad["presets"][0]["location"] = wrapped
@@ -71,20 +74,20 @@ KEPT = {"buttonNumber": 2, "name": "An Album", "location": "/playback/container/
         "contentItemType": "tracklisturl", "source": "SPOTIFY", "keep": True}
 
 
-def test_a_kept_entry_loads_without_a_stream_url(tmp_path):
+def test_a_kept_entry_loads_without_a_stream_url(tmp_path: Path) -> None:
     """A Spotify or library preset is not radio; demanding an http stream for it is the bug."""
-    data = dict(GOOD, presets=[GOOD["presets"][0], KEPT])
+    data = dict(GOOD, presets=[GOOD_PRESET, KEPT])
     assert len(P.load_template(_write(tmp_path, data))) == 2
 
 
-def test_validate_reports_a_kept_entry_as_kept_not_unplayable(tmp_path, capsys):
+def test_validate_reports_a_kept_entry_as_kept_not_unplayable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Nothing is fetched for it: an album location is not a URL, and fetching it would read dead."""
     assert P.main(["validate", "--template", _write(tmp_path, dict(GOOD, presets=[KEPT]))]) == 0
     result = json.loads(capsys.readouterr().out)["data"]["results"][0]
     assert (result["verdict"], result["name"]) == ("kept", "An Album")
 
 
-def test_preset_xml_wraps_the_location_as_the_player_does():
+def test_preset_xml_wraps_the_location_as_the_player_does() -> None:
     """A raw stream URL here is accepted by the speaker and never plays. The wrapping is the
     relative Orion form AfterTouch's own player and CLI write since v0.138.0, so there is one
     format on the account and the preset follows the service to a new address."""
@@ -94,37 +97,41 @@ def test_preset_xml_wraps_the_location_as_the_player_does():
     assert 'location="https://radio.example.com/stream"' not in xml
 
 
-def test_preset_xml_writes_the_absolute_form_only_when_given_a_service():
+def test_preset_xml_writes_the_absolute_form_only_when_given_a_service() -> None:
     """The fallback for firmware that cannot resolve a relative location."""
     xml = P.preset_xml(ENTRY, service="http://192.0.2.10:8000")
     assert 'location="http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=' in xml
 
 
-def test_preset_xml_escapes_the_station_name():
+def test_preset_xml_escapes_the_station_name() -> None:
     entry = dataclasses.replace(ENTRY, name="Rock & Roll <FM>")
     xml = P.preset_xml(entry)
     assert "<itemName>Rock &amp; Roll &lt;FM&gt;</itemName>" in xml
 
 
-def test_preset_xml_carries_the_source_and_type():
+def test_preset_xml_carries_the_source_and_type() -> None:
     xml = P.preset_xml(ENTRY)
     assert 'source="LOCAL_INTERNET_RADIO"' in xml and 'type="stationurl"' in xml
 
 
-def test_radio_source_mounted_is_false_when_the_speaker_cannot_be_reached(monkeypatch):
+def _sources_reply(status: str) -> Callable[..., str]:
+    def reply(*_args: object, **_kwargs: object) -> str:
+        return f'<sourceItem source="LOCAL_INTERNET_RADIO" status="{status}" />'
+    return reply
+
+
+def test_radio_source_mounted_is_false_when_the_speaker_cannot_be_reached(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unreachable must read as not-ready, so a restore never writes into the wipe window."""
-    def boom(_url, timeout=8.0):
+    def boom(_url: str, timeout: float = 8.0) -> NoReturn:
         raise P.SpeakerError("unreachable")
     monkeypatch.setattr(P, "http_get", boom)
     assert P.radio_source_mounted("192.0.2.31") is False
 
 
-def test_radio_source_mounted_is_true_only_when_the_radio_source_is_mounted(monkeypatch):
-    monkeypatch.setattr(P, "http_get", lambda *a, **k:
-                        '<sourceItem source="LOCAL_INTERNET_RADIO" status="READY" />')
+def test_radio_source_mounted_is_true_only_when_the_radio_source_is_mounted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(P, "http_get", _sources_reply("READY"))
     assert P.radio_source_mounted("192.0.2.31") is True
-    monkeypatch.setattr(P, "http_get", lambda *a, **k:
-                        '<sourceItem source="LOCAL_INTERNET_RADIO" status="UNAVAILABLE" />')
+    monkeypatch.setattr(P, "http_get", _sources_reply("UNAVAILABLE"))
     assert P.radio_source_mounted("192.0.2.31") is False
 
 
@@ -155,12 +162,12 @@ class FakeSpeaker:
         self.location = body.split('location="', 1)[1].split('"', 1)[0].replace("&amp;", "&")
 
 
-def _fake(monkeypatch, speaker: FakeSpeaker) -> None:
+def _fake(monkeypatch: pytest.MonkeyPatch, speaker: FakeSpeaker) -> None:
     monkeypatch.setattr(P, "http_get", speaker.get)
     monkeypatch.setattr(P, "_post_preset", speaker.post)
 
 
-def test_relativize_without_confirm_only_reports(monkeypatch, tmp_path, capsys):
+def test_relativize_without_confirm_only_reports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker(ABSOLUTE)
     _fake(monkeypatch, speaker)
     rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path)])
@@ -169,7 +176,7 @@ def test_relativize_without_confirm_only_reports(monkeypatch, tmp_path, capsys):
     assert data["would_rewrite"] == [3]
 
 
-def test_relativize_backs_up_then_rewrites_to_the_relative_form(monkeypatch, tmp_path, capsys):
+def test_relativize_backs_up_then_rewrites_to_the_relative_form(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker(ABSOLUTE)
     _fake(monkeypatch, speaker)
     rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
@@ -180,7 +187,7 @@ def test_relativize_backs_up_then_rewrites_to_the_relative_form(monkeypatch, tmp
     assert any(p.name.endswith("-presets.xml") for p in tmp_path.iterdir())
 
 
-def test_relativize_is_a_no_op_when_everything_is_relative(monkeypatch, tmp_path, capsys):
+def test_relativize_is_a_no_op_when_everything_is_relative(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker(C.orion_location("https://a.example.com/s", "A"))
     _fake(monkeypatch, speaker)
     rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
@@ -188,7 +195,7 @@ def test_relativize_is_a_no_op_when_everything_is_relative(monkeypatch, tmp_path
     assert json.loads(capsys.readouterr().out)["data"]["rewrote"] == []
 
 
-def test_relativize_refuses_to_write_before_the_radio_source_is_mounted(monkeypatch, tmp_path, capsys):
+def test_relativize_refuses_to_write_before_the_radio_source_is_mounted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A write in the boot window is silently undone, as for restore."""
     speaker = FakeSpeaker(ABSOLUTE, radio="UNAVAILABLE")
     _fake(monkeypatch, speaker)
@@ -202,7 +209,7 @@ LEGACY = (f"http://192.0.2.10:8000{C.PLAYBACK_PATH}"
           f"{__import__('base64').urlsafe_b64encode(LEGACY_STREAM.encode()).decode()}?name=A")
 
 
-def test_relativize_rewrites_a_legacy_playback_slot(monkeypatch, tmp_path, capsys):
+def test_relativize_rewrites_a_legacy_playback_slot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker(LEGACY)
     _fake(monkeypatch, speaker)
     rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
@@ -212,16 +219,17 @@ def test_relativize_rewrites_a_legacy_playback_slot(monkeypatch, tmp_path, capsy
     assert speaker.location == C.orion_location(LEGACY_STREAM, "A")
 
 
-def _check(monkeypatch, tmp_path, capsys, location: str) -> tuple[int, dict]:
+def _check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+           location: str):
     _fake(monkeypatch, FakeSpeaker(location))
-    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    template = dict(GOOD, presets=[dict(GOOD_PRESET, buttonNumber=3)])
     rc = P.main(["check", "--ip", "192.0.2.31", "--template", _write(tmp_path, template)])
     return rc, json.loads(capsys.readouterr().out)["data"]
 
 
 @pytest.mark.parametrize("location", [
     LEGACY, C.orion_location(LEGACY_STREAM, "A", service="http://192.0.2.10:8000")])
-def test_check_warns_on_a_host_bound_slot_and_still_passes(monkeypatch, tmp_path, capsys, location):
+def test_check_warns_on_a_host_bound_slot_and_still_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], location: str) -> None:
     """The station is right, so the check passes; the host in the location is what is wrong."""
     rc, data = _check(monkeypatch, tmp_path, capsys, location)
     assert rc == 0, data
@@ -229,10 +237,10 @@ def test_check_warns_on_a_host_bound_slot_and_still_passes(monkeypatch, tmp_path
     assert "relativize" in data["warning"]
 
 
-def test_restore_says_already_correct_but_names_a_host_bound_slot(monkeypatch, tmp_path, capsys):
+def test_restore_says_already_correct_but_names_a_host_bound_slot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """restore compares streams, so it writes nothing here; it must still say what it saw."""
     _fake(monkeypatch, FakeSpeaker(LEGACY))
-    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    template = dict(GOOD, presets=[dict(GOOD_PRESET, buttonNumber=3)])
     rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template),
                  "--confirm"])
     data = json.loads(capsys.readouterr().out)["data"]
@@ -240,46 +248,47 @@ def test_restore_says_already_correct_but_names_a_host_bound_slot(monkeypatch, t
     assert data["host_bound"] == [3] and "relativize" in data["warning"]
 
 
-def test_check_has_no_warning_for_a_relative_slot(monkeypatch, tmp_path, capsys):
+def test_check_has_no_warning_for_a_relative_slot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc, data = _check(monkeypatch, tmp_path, capsys, C.orion_location(LEGACY_STREAM, "A"))
     assert rc == 0, data
     assert data["host_bound"] == [] and "warning" not in data
 
 
-def test_restore_writes_the_relative_form(monkeypatch, tmp_path, capsys):
+def test_restore_writes_the_relative_form(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker("https://old.example.com/gone")
     _fake(monkeypatch, speaker)
-    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    template = dict(GOOD, presets=[dict(GOOD_PRESET, buttonNumber=3)])
     rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template),
                  "--confirm"])
     assert rc == 0, capsys.readouterr().out
     assert speaker.location.startswith("/station?data=")
 
 
-def test_restore_absolute_needs_a_service(tmp_path, capsys):
+def test_restore_absolute_needs_a_service(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, GOOD),
                  "--absolute", "--confirm"])
     assert rc == 2 and "--service" in json.loads(capsys.readouterr().out)["data"]["error"]
 
 
-def test_restore_absolute_writes_the_service_host(monkeypatch, tmp_path, capsys):
+def test_restore_absolute_writes_the_service_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     speaker = FakeSpeaker("https://old.example.com/gone")
     _fake(monkeypatch, speaker)
-    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    template = dict(GOOD, presets=[dict(GOOD_PRESET, buttonNumber=3)])
     rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template),
                  "--service", "http://192.0.2.10:8000", "--absolute", "--confirm"])
     assert rc == 0, capsys.readouterr().out
     assert speaker.location.startswith("http://192.0.2.10:8000/core02/")
 
 
-def _restore(monkeypatch, tmp_path, capsys, speaker: FakeSpeaker, *extra: str) -> tuple[int, dict]:
+def _restore(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+             speaker: FakeSpeaker, *extra: str):
     _fake(monkeypatch, speaker)
-    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    template = dict(GOOD, presets=[dict(GOOD_PRESET, buttonNumber=3)])
     rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template), *extra])
     return rc, json.loads(capsys.readouterr().out)["data"]
 
 
-def test_a_restore_dry_run_names_the_host_bound_slots_it_read(monkeypatch, tmp_path, capsys):
+def test_a_restore_dry_run_names_the_host_bound_slots_it_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc, data = _restore(monkeypatch, tmp_path, capsys,
                         FakeSpeaker(C.orion_location("https://old.example.com/gone", "A",
                                                      service="http://192.0.2.10:8000")))
@@ -287,8 +296,7 @@ def test_a_restore_dry_run_names_the_host_bound_slots_it_read(monkeypatch, tmp_p
     assert data["host_bound"] == [3]
 
 
-def test_a_restore_reports_host_bound_from_what_the_speaker_holds_afterwards(monkeypatch, tmp_path,
-                                                                             capsys):
+def test_a_restore_reports_host_bound_from_what_the_speaker_holds_afterwards(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc, data = _restore(monkeypatch, tmp_path, capsys, FakeSpeaker("https://old.example.com/gone"),
                         "--confirm")
     assert rc == 0, data
@@ -308,15 +316,13 @@ class VanishingSpeaker(FakeSpeaker):
         return super().get(url, timeout)
 
 
-def test_a_restore_whose_speaker_vanishes_after_writing_answers_with_an_envelope(
-        monkeypatch, tmp_path, capsys):
+def test_a_restore_whose_speaker_vanishes_after_writing_answers_with_an_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc, data = _restore(monkeypatch, tmp_path, capsys,
                         VanishingSpeaker("https://old.example.com/gone"), "--confirm")
     assert rc == 2 and data["wrote"] and "timed out" in data["error"]
 
 
-def test_a_relativize_whose_speaker_vanishes_after_writing_answers_with_an_envelope(
-        monkeypatch, tmp_path, capsys):
+def test_a_relativize_whose_speaker_vanishes_after_writing_answers_with_an_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _fake(monkeypatch, VanishingSpeaker(ABSOLUTE))
     rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
     data = json.loads(capsys.readouterr().out)["data"]

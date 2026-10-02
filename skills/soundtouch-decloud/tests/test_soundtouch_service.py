@@ -66,13 +66,13 @@ def test_render_pins_the_requested_version():
 
 
 @pytest.mark.parametrize("bad", ["127.0.0.1", "localhost", "::1", "0.0.0.0", ""])
-def test_validate_host_rejects_addresses_a_speaker_cannot_call_back_to(bad):
+def test_validate_host_rejects_addresses_a_speaker_cannot_call_back_to(bad: str) -> None:
     ok, _ = S.validate_host(bad)
     assert ok is False
 
 
 @pytest.mark.parametrize("good", ["192.0.2.10", "198.51.100.4", "nas.example.com"])
-def test_validate_host_accepts_a_real_address(good):
+def test_validate_host_accepts_a_real_address(good: str) -> None:
     ok, _ = S.validate_host(good)
     assert ok is True
 
@@ -97,9 +97,12 @@ def test_install_hint_is_case_insensitive():
     assert S.install_hint("Windows") == S.install_hint("windows")
 
 
-def test_docker_report_reports_absence_without_raising(monkeypatch):
+def test_docker_report_reports_absence_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     """A machine with no Docker is the normal case this walks the owner through, not an error."""
-    monkeypatch.setattr(S.shutil, "which", lambda _: None)
+    def no_tool(_name: str) -> None:
+        return None
+
+    monkeypatch.setattr(S.shutil, "which", no_tool)
     rep = S.docker_report()
     assert rep.docker is False and rep.compose is False
     assert rep.to_json() == {"docker": False, "compose": False}

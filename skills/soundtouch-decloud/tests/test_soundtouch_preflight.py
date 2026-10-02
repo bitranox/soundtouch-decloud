@@ -38,13 +38,13 @@ def test_an_explicit_system_wins_over_detection():
     ('ID=rocky\nID_LIKE="rhel centos fedora"\n', "fedora"),
     ('ID=alpine\n', "alpine"),
 ])
-def test_the_linux_family_is_read_from_os_release(tmp_path, content, expected):
+def test_the_linux_family_is_read_from_os_release(tmp_path: Path, content: str, expected: str) -> None:
     path = tmp_path / "os-release"
     path.write_text(content, encoding="utf-8")
     assert P.linux_family(str(path)) == expected
 
 
-def test_a_missing_os_release_is_not_a_crash(tmp_path):
+def test_a_missing_os_release_is_not_a_crash(tmp_path: Path) -> None:
     assert P.linux_family(str(tmp_path / "nope")) == "linux"
 
 
@@ -85,7 +85,10 @@ def test_compose_absent_is_its_own_finding_and_docker_stays_present():
     installed Docker was told to install Docker. Docker must read present, compose must read
     absent, and the instruction must be about the PLUGIN.
     """
-    which, version = _which("docker"), lambda argv: "" if "compose" in argv else "1.2.3"
+    def version(argv: list[str]) -> str:
+        return "" if "compose" in argv else "1.2.3"
+
+    which = _which("docker")
     docker = P.check_docker("debian", which=which, version=version)
     compose = P.check_compose("debian", which=which, version=version)
     assert docker.present is True
@@ -149,7 +152,7 @@ def test_every_missing_required_tool_carries_an_install_instruction():
 
 # --- the CLI --------------------------------------------------------------------------------
 
-def test_the_cli_exits_zero_and_prints_an_envelope_on_this_machine(capsys):
+def test_the_cli_exits_zero_and_prints_an_envelope_on_this_machine(capsys: pytest.CaptureFixture[str]) -> None:
     rc = P.main([])
     body = json.loads(capsys.readouterr().out)
     assert set(body) >= {"ok", "command", "data"}
@@ -158,7 +161,7 @@ def test_the_cli_exits_zero_and_prints_an_envelope_on_this_machine(capsys):
     assert (rc == 0) == body["ok"]
 
 
-def test_an_unknown_system_still_answers_rather_than_failing(capsys):
+def test_an_unknown_system_still_answers_rather_than_failing(capsys: pytest.CaptureFixture[str]) -> None:
     assert P.main(["--system", "haiku"]) in (0, 1)
     body = json.loads(capsys.readouterr().out)
     assert body["data"]["system"] == "haiku"
@@ -201,7 +204,8 @@ def test_a_result_serialises_with_install_only_when_it_has_one():
     assert full.to_json()["tool"] == "uv"
 
 
-def test_a_missing_python_gains_an_install_line_and_the_original_is_untouched(monkeypatch):
+def test_a_missing_python_gains_an_install_line_and_the_original_is_untouched(
+        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(P.sys, "version_info", (3, 9, 0, "final", 0))
     result = P.run_checks("debian", which=_which(), version=_version)[0]
     assert result.present is False
@@ -226,7 +230,7 @@ OLD_PYTHONS = [name for name in ("python3.9", "python3.10") if shutil.which(name
 
 @pytest.mark.skipif(not OLD_PYTHONS, reason="no Python 3.9 or 3.10 on PATH to run the script under")
 @pytest.mark.parametrize("interpreter", OLD_PYTHONS)
-def test_preflight_reports_a_python_older_than_the_floor_instead_of_crashing(interpreter):
+def test_preflight_reports_a_python_older_than_the_floor_instead_of_crashing(interpreter: str) -> None:
     """The owner most likely to need this check is the one whose Python is too old for the rest."""
     script = Path(P.__file__).resolve()
     run = subprocess.run([shutil.which(interpreter) or interpreter, str(script), "--system", "ubuntu"],

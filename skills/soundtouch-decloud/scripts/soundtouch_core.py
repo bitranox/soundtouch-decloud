@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Shared logic for talking to a Bose SoundTouch speaker.
 
-Only the standard library, so these modules import in a bare environment.
+Only the standard library, so these modules import in a bare environment. That is also why the
+records below are frozen dataclasses and StrEnums rather than pydantic models: each reply from the
+speaker is parsed ONCE into one of them, and turned back into a plain dict only by its `to_json`,
+at the moment a script prints its envelope.
 
 The parsing here looks simpler than it is, and each function documents the reading that a plausible
 implementation gets wrong: a configuration value sits on the line AFTER its field name, the source
@@ -20,7 +23,10 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 
 TELNET_PORT = 17000
 API_PORT = 8090
@@ -33,9 +39,76 @@ PROMPT = b"->"
 # reaches a day. The fault this catches is eleven years, not minutes.
 CLOCK_TOLERANCE_S = 86400
 
-URL_FIELDS = ("margeServerUrl", "statsServerUrl", "swUpdateUrl", "bmxRegistryUrl")
+
+class UrlField(StrEnum):
+    """The four service URLs a speaker carries, in the order a migrated speaker lists them."""
+
+    MARGE = "margeServerUrl"
+    STATS = "statsServerUrl"
+    SW_UPDATE = "swUpdateUrl"
+    BMX_REGISTRY = "bmxRegistryUrl"
+
+
+class RadioSource(StrEnum):
+    """The radio sources a speaker mounts from the registry, and the only ones this skill judges."""
+
+    TUNEIN = "TUNEIN"
+    LOCAL_INTERNET_RADIO = "LOCAL_INTERNET_RADIO"
+    RADIO_BROWSER = "RADIO_BROWSER"
+
+
+class SourceStatus(StrEnum):
+    """The source status words this skill acts on.
+
+    A speaker's status is FIRMWARE text and is carried as it was reported (UNAVAILABLE and the
+    like pass straight through); only READY is acted on. ABSENT and UNKNOWN are this skill's own
+    words, for a source the speaker never listed and for an entry that carried no status.
+    """
+
+    READY = "READY"
+    ABSENT = "ABSENT"
+    UNKNOWN = "?"
+
+
+class ContentItemType(StrEnum):
+    """The ContentItem type this skill writes. Every other type is carried as the speaker stored it."""
+
+    STATION_URL = "stationurl"
+
+
+class RegistryVerdict(StrEnum):
+    OK = "ok"
+    FOREIGN = "foreign"
+    DNS_MODE = "dns-mode"
+    UNREADABLE = "unreadable"
+    UNJUDGED = "unjudged"
+
+
+class ClockVerdict(StrEnum):
+    OK = "ok"
+    WRONG = "wrong"
+    UNKNOWN = "unknown"
+
+
+class StreamKind(StrEnum):
+    """What a candidate stream URL turned out to be.
+
+    `classify_stream` answers the first five from a fetch. MISSING and KEPT are given without one:
+    a template hole nobody has filled yet, and an entry that is not radio at all.
+    """
+
+    AUDIO = "audio"
+    PLAYLIST = "playlist"
+    HLS = "hls"
+    DEAD = "dead"
+    NOT_AUDIO = "not-audio"
+    MISSING = "missing"
+    KEPT = "kept"
+
+
+URL_FIELDS = tuple(UrlField)
 CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
-RADIO_SOURCES = ("TUNEIN", "LOCAL_INTERNET_RADIO", "RADIO_BROWSER")
+RADIO_SOURCES = tuple(RadioSource)
 # The form this skill wrote before 1.8.0. Still READ, because speakers keep what was stored, and
 # some of AfterTouch's own playback paths still produce it; never written any more.
 PLAYBACK_PATH = "/custom/v1/playback/"
@@ -51,7 +124,7 @@ ORION_STATION_PATH = "/station"
 ORION_PATH = ORION_BASE_PATH + ORION_STATION_PATH
 # What Go's json.Marshal escapes on top of JSON itself (its HTML-safe default).
 _GO_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026",
-                    "\u2028": "\\u2028", "\u2029": "\\u2029"}
+                    " ": "\\u2028", " ": "\\u2029"}
 # Served for .m3u and .pls. They are TEXT that lists streams, so a bare `audio/` test passes them
 # and the resulting preset is accepted at write time and never plays.
 PLAYLIST_TYPES = ("audio/x-mpegurl", "audio/mpegurl", "application/x-mpegurl",
@@ -63,15 +136,19 @@ PLAYLIST_TYPES = ("audio/x-mpegurl", "audio/mpegurl", "application/x-mpegurl",
 SSH_INJECT = ";touch /tmp/remote_services;/etc/init.d/sshd start"
 
 __all__ = [
-    "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
+    "UrlField", "RadioSource", "SourceStatus", "ContentItemType", "RegistryVerdict",
+    "ClockVerdict", "StreamKind",
+    "ServiceUrls", "RadioSources", "TelnetReply", "RegistryCheck", "ClockState", "PresetItem",
+    "Presets", "PresetEntry", "RelativizeStep",
+    "URL_FIELDS", "RADIO_SOURCES",
+    "parse_urls", "parse_sources", "service_urls",
     "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "orion_location", "ORION_PATH",
     "ORION_BASE_PATH", "ORION_STATION_PATH", "relative_orion_location", "relativize_plan",
     "registry_verdict",
     "PLAYBACK_PATH", "decode_playback_location", "slots_to_write", "missing_streams",
-    "parse_presets", "parse_preset_slots", "parse_preset_items", "port_open", "telnet_run",
-    "http_get",
+    "parse_presets", "port_open", "telnet_run", "http_get",
     "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
-    "preset_name", "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
+    "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
     "http_date_header", "clock_state", "CLOCK_TOLERANCE_S",
     "SpeakerError",
 ]
@@ -81,64 +158,223 @@ class SpeakerError(RuntimeError):
     """The speaker did not answer the way its firmware is documented to."""
 
 
-def parse_urls(raw: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class ServiceUrls:
+    """Service URLs a speaker carries, in the order they were read; a field may be absent."""
+
+    values: Mapping[UrlField, str]
+
+    def __bool__(self) -> bool:
+        return bool(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __contains__(self, field: object) -> bool:
+        return field in self.values
+
+    def get(self, field: UrlField) -> str:
+        """One field's value, or "" when the speaker did not report it."""
+        return self.values.get(field, "")
+
+    def missing(self) -> list[UrlField]:
+        """The fields the speaker did not report at all, in canonical order."""
+        return [field for field in UrlField if field not in self.values]
+
+    def cloud_leftovers(self) -> ServiceUrls:
+        """Fields still pointing at the shut-down Bose cloud.
+
+        All three domains are checked because they are not interchangeable: clearing only bose.com
+        leaves bmxRegistryUrl on bose.io, and without that the speaker mounts no radio source at all
+        while otherwise looking migrated.
+        """
+        return ServiceUrls({k: v for k, v in self.values.items() if any(m in v for m in CLOUD_MARKERS)})
+
+    def injected(self) -> ServiceUrls:
+        """Fields still carrying shell text from the injection method, which must be cleaned up."""
+        return ServiceUrls({k: v for k, v in self.values.items() if ";" in v})
+
+    def to_json(self) -> dict[str, str]:
+        return {field.value: value for field, value in self.values.items()}
+
+
+@dataclass(frozen=True)
+class RadioSources:
+    """Each radio source's status as the speaker reported it (see SourceStatus)."""
+
+    statuses: Mapping[RadioSource, str]
+
+    def __bool__(self) -> bool:
+        return bool(self.statuses)
+
+    def is_ready(self, source: RadioSource) -> bool:
+        return self.statuses.get(source) == SourceStatus.READY
+
+    def all_ready(self) -> bool:
+        """Every listed source is READY; vacuously true for an empty reading, so test bool first."""
+        return all(status == SourceStatus.READY for status in self.statuses.values())
+
+    def to_json(self) -> dict[str, str]:
+        return {source.value: str(status) for source, status in self.statuses.items()}
+
+
+@dataclass(frozen=True)
+class TelnetReply:
+    """One command sent to the diagnostic port and what came back.
+
+    `complete` is False when the `->` prompt never arrived and the reply is whatever had been
+    received when the read timed out.
+    """
+
+    cmd: str
+    reply: str
+    complete: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {"cmd": self.cmd, "reply": self.reply, "complete": self.complete}
+
+
+@dataclass(frozen=True)
+class RegistryCheck:
+    """What the BMX registry advertises, judged against the service it should name.
+
+    `expected` and `advertised` are None only when the registry could not be fetched at all, in
+    which case `error` says why.
+    """
+
+    verdict: RegistryVerdict
+    expected: str | None = None
+    advertised: Mapping[str, str] | None = None
+    reason: str = ""
+    error: str = ""
+
+    def to_json(self) -> dict[str, object]:
+        if self.expected is None:
+            return {"verdict": self.verdict.value, "error": self.error}
+        out: dict[str, object] = {"expected": self.expected, "advertised": dict(self.advertised or {}),
+                                  "verdict": self.verdict.value}
+        if self.reason:
+            out["reason"] = self.reason
+        return out
+
+
+@dataclass(frozen=True)
+class ClockState:
+    """A speaker's clock judged from its Date header, and the wall clock the box itself reported."""
+
+    verdict: ClockVerdict
+    reading: str | None
+
+    def to_json(self) -> dict[str, object]:
+        return {"verdict": self.verdict.value, "reading": self.reading}
+
+
+@dataclass(frozen=True)
+class PresetItem:
+    """One button as the speaker stores it. `name` is "" when the slot carries no itemName."""
+
+    button: int
+    location: str
+    source: str
+    type: str
+    name: str
+
+
+@dataclass(frozen=True)
+class Presets:
+    """A speaker's /presets, read once.
+
+    `items` holds the buttons that carry a location, keyed by button. `locations` is every stored
+    location in document order, which is what counts how many presets a speaker holds.
+    """
+
+    items: Mapping[int, PresetItem]
+    locations: tuple[str, ...]
+
+    def slots(self) -> dict[int, str]:
+        """Which BUTTON currently holds which location."""
+        return {button: item.location for button, item in self.items.items()}
+
+
+@dataclass(frozen=True)
+class PresetEntry:
+    """One button of a preset template: what the owner wants on it.
+
+    An entry with `keep` set is not radio (an album, a library track); it is carried over exactly
+    as stored and never written.
+    """
+
+    button_number: int
+    name: str
+    location: str
+    content_item_type: str = ContentItemType.STATION_URL
+    source: str = RadioSource.LOCAL_INTERNET_RADIO
+    keep: bool = False
+
+    def to_json(self) -> dict[str, object]:
+        out: dict[str, object] = {"buttonNumber": self.button_number, "name": self.name,
+                                  "location": self.location,
+                                  "contentItemType": str(self.content_item_type),
+                                  "source": str(self.source)}
+        if self.keep:
+            out["keep"] = True
+        return out
+
+
+@dataclass(frozen=True)
+class RelativizeStep:
+    """One host-bound button, and the storePreset body that stores it again in the relative form."""
+
+    button: int
+    old: str
+    new: str
+    body: str
+
+
+def parse_urls(raw: str) -> ServiceUrls:
     """Read the four service URLs out of `getpdo CurrentSystemConfiguration` output.
 
     getpdo prints `<name> {` and puts the value on a FOLLOWING line as `text: "..."`. A single-line
     pattern therefore matches the field names and captures no values at all, which reads as a
     successful check against a speaker that was never actually read.
     """
-    found: dict[str, str] = {}
+    found: dict[UrlField, str] = {}
     lines = raw.splitlines()
     for idx, line in enumerate(lines):
-        for name in URL_FIELDS:
+        for name in UrlField:
             if name in line and "{" in line:
                 for follow in lines[idx + 1: idx + 4]:
                     if "text:" in follow:
                         found[name] = follow.split("text:", 1)[1].strip().strip('",')
                         break
-    return found
+    return ServiceUrls(found)
 
 
-def parse_sources(raw: str) -> dict[str, str]:
+def parse_sources(raw: str) -> RadioSources:
     """Map each radio source to its status, defaulting to ABSENT.
 
     The entries are SELF-CLOSING tags carrying no text, so a `<tag>Label</tag>` pattern finds
     nothing and reports every source missing. Match the attribute. ABSENT stays distinct from a real
     status so a source the speaker never published cannot read as READY.
     """
-    seen: dict[str, str] = {}
+    seen: dict[RadioSource, str] = {}
     for chunk in raw.split("<sourceItem")[1:]:
-        for name in RADIO_SOURCES:
+        for name in RadioSource:
             if f'source="{name}"' in chunk:
-                seen[name] = chunk.split('status="', 1)[1].split('"', 1)[0] if 'status="' in chunk else "?"
-    return {name: seen.get(name, "ABSENT") for name in RADIO_SOURCES}
+                seen[name] = (chunk.split('status="', 1)[1].split('"', 1)[0] if 'status="' in chunk
+                              else SourceStatus.UNKNOWN)
+    return RadioSources({name: seen.get(name, SourceStatus.ABSENT) for name in RadioSource})
 
 
-def service_urls(service: str) -> dict[str, str]:
+def service_urls(service: str) -> ServiceUrls:
     """The four URLs a migrated speaker must carry."""
     service = service.rstrip("/")
-    return {
-        "margeServerUrl": service,
-        "statsServerUrl": service,
-        "swUpdateUrl": f"{service}/updates/soundtouch",
-        "bmxRegistryUrl": f"{service}/bmx/registry/v1/services",
-    }
-
-
-def cloud_leftovers(urls: dict[str, str]) -> dict[str, str]:
-    """Fields still pointing at the shut-down Bose cloud.
-
-    All three domains are checked because they are not interchangeable: clearing only bose.com
-    leaves bmxRegistryUrl on bose.io, and without that the speaker mounts no radio source at all
-    while otherwise looking migrated.
-    """
-    return {k: v for k, v in urls.items() if any(m in v for m in CLOUD_MARKERS)}
-
-
-def injected_values(urls: dict[str, str]) -> dict[str, str]:
-    """Fields still carrying shell text from the injection method, which must be cleaned up."""
-    return {k: v for k, v in urls.items() if ";" in v}
+    return ServiceUrls({
+        UrlField.MARGE: service,
+        UrlField.STATS: service,
+        UrlField.SW_UPDATE: f"{service}/updates/soundtouch",
+        UrlField.BMX_REGISTRY: f"{service}/bmx/registry/v1/services",
+    })
 
 
 def build_url_commands(service: str, *, inject: str = "") -> list[str]:
@@ -151,13 +387,14 @@ def build_url_commands(service: str, *, inject: str = "") -> list[str]:
     value is gone after the reboot even though each command answered OK.
     """
     wanted = service_urls(service)
-    marge = wanted["margeServerUrl"] + inject
+    marge = wanted.get(UrlField.MARGE) + inject
+    update = wanted.get(UrlField.SW_UPDATE)
     return [
-        f'sys configuration margeServerUrl "{marge}"',
-        f'sys configuration bmxRegistryUrl "{wanted["bmxRegistryUrl"]}"',
-        f'sys configuration statsServerUrl "{wanted["statsServerUrl"]}"',
-        f'sys configuration swUpdateUrl "{wanted["swUpdateUrl"]}"',
-        f'envswitch boseurls set "{marge}" "{wanted["swUpdateUrl"]}"',
+        f'sys configuration {UrlField.MARGE} "{marge}"',
+        f'sys configuration {UrlField.BMX_REGISTRY} "{wanted.get(UrlField.BMX_REGISTRY)}"',
+        f'sys configuration {UrlField.STATS} "{wanted.get(UrlField.STATS)}"',
+        f'sys configuration {UrlField.SW_UPDATE} "{update}"',
+        f'envswitch boseurls set "{marge}" "{update}"',
     ]
 
 
@@ -174,15 +411,16 @@ def build_enable_ssh_commands(service: str, *, full_config: bool = False) -> lis
     fire on and fails silently. Check the account before running either.
     """
     wanted = service_urls(service)
-    marge = wanted["margeServerUrl"] + SSH_INJECT
-    envswitch = f'envswitch boseurls set "{marge}" "{wanted["swUpdateUrl"]}"'
+    marge = wanted.get(UrlField.MARGE) + SSH_INJECT
+    update = wanted.get(UrlField.SW_UPDATE)
+    envswitch = f'envswitch boseurls set "{marge}" "{update}"'
     if not full_config:
         return [envswitch]
     return [
-        f'sys configuration bmxRegistryUrl "{wanted["bmxRegistryUrl"]}"',
-        f'sys configuration statsServerUrl "{wanted["statsServerUrl"]}"',
-        f'sys configuration margeServerUrl "{marge}"',
-        f'sys configuration swUpdateUrl "{wanted["swUpdateUrl"]}"',
+        f'sys configuration {UrlField.BMX_REGISTRY} "{wanted.get(UrlField.BMX_REGISTRY)}"',
+        f'sys configuration {UrlField.STATS} "{wanted.get(UrlField.STATS)}"',
+        f'sys configuration {UrlField.MARGE} "{marge}"',
+        f'sys configuration {UrlField.SW_UPDATE} "{update}"',
         envswitch,
         "getpdo CurrentSystemConfiguration",
         "sys reboot",
@@ -254,7 +492,7 @@ def _relative_location(item: ET.Element) -> str:
     return "" if new == old else new
 
 
-def relativize_plan(raw: str) -> list[dict[str, object]]:
+def relativize_plan(raw: str) -> list[RelativizeStep]:
     """Which buttons hold a HOST-BOUND radio location, and the storePreset body that fixes each.
 
     Host-bound means an absolute Orion location or a legacy /custom/v1/playback one: both name the
@@ -263,15 +501,18 @@ def relativize_plan(raw: str) -> list[dict[str, object]]:
     only the location swapped for its relative form, so the station, its picture and its button are
     what they were. Only LOCAL_INTERNET_RADIO is touched: a TuneIn or Spotify location is not an
     Orion station however it is spelled.
+
+    This reads the raw document with ElementTree rather than taking the parsed Presets, because the
+    body it builds IS the speaker's own element, re-serialized with one attribute changed.
     """
     try:
         root = ET.fromstring(raw)  # noqa: S314 - the speaker's own /presets on the LAN
     except ET.ParseError:
         return []
-    plan: list[dict[str, object]] = []
+    plan: list[RelativizeStep] = []
     for preset in root.iter("preset"):
         item = preset.find("ContentItem")
-        if item is None or item.get("source") != "LOCAL_INTERNET_RADIO":
+        if item is None or item.get("source") != RadioSource.LOCAL_INTERNET_RADIO:
             continue
         old = item.get("location", "")
         new = _relative_location(item)
@@ -279,7 +520,7 @@ def relativize_plan(raw: str) -> list[dict[str, object]]:
             continue
         item.set("location", new)
         body = f'<preset id="{preset.get("id")}">{ET.tostring(item, encoding="unicode")}</preset>'
-        plan.append({"button": int(preset.get("id", "0")), "old": old, "new": new, "body": body})
+        plan.append(RelativizeStep(button=int(preset.get("id", "0")), old=old, new=new, body=body))
     return plan
 
 
@@ -300,7 +541,18 @@ def _is_loopback(url: str) -> bool:
         return False
 
 
-def registry_verdict(service: str, body: str) -> dict[str, object]:
+def _advertised(body: str) -> dict[str, str]:
+    """The TUNEIN and LOCAL_INTERNET_RADIO baseUrls a registry body names, or {} if unreadable."""
+    judged = (RadioSource.TUNEIN, RadioSource.LOCAL_INTERNET_RADIO)
+    try:
+        services = json.loads(body).get("bmx_services")
+        return {str(s["id"]["name"]): str(s["baseUrl"]) for s in services
+                if s.get("id", {}).get("name") in judged}
+    except (ValueError, AttributeError, TypeError, KeyError):
+        return {}
+
+
+def registry_verdict(service: str, body: str) -> RegistryCheck:
     """Does the BMX registry send speakers back to THIS service? ok, foreign, dns-mode, unreadable,
     or unjudged when `service` is a loopback address, which says nothing about what speakers use.
 
@@ -311,27 +563,26 @@ def registry_verdict(service: str, body: str) -> dict[str, object]:
     another install keeps advertising the machine it was cloned from. In AfterTouch's DNS mode the
     registry names content.api.bose.io on purpose, which is reported as such rather than as foreign.
     """
-    try:
-        services = json.loads(body).get("bmx_services")
-        advertised = {str(s["id"]["name"]): str(s["baseUrl"]) for s in services
-                      if s.get("id", {}).get("name") in ("TUNEIN", "LOCAL_INTERNET_RADIO")}
-    except (ValueError, AttributeError, TypeError, KeyError):
-        advertised = {}
-    result: dict[str, object] = {"expected": _origin(service), "advertised": advertised}
+    advertised = _advertised(body)
+    expected = _origin(service)
+
+    def judged(verdict: RegistryVerdict, reason: str = "") -> RegistryCheck:
+        return RegistryCheck(verdict=verdict, expected=expected, advertised=advertised, reason=reason)
+
     if _is_loopback(service):
         # The address this was run with names the service as THIS machine sees it, not as a
         # speaker does, so nothing it says about the registry's host can be judged against it.
-        return {**result, "verdict": "unjudged",
-                "reason": "the service address given is a loopback address, which no speakers "
-                          "use; pass the address the speakers call back to"}
-    if set(advertised) != {"TUNEIN", "LOCAL_INTERNET_RADIO"}:
-        return {**result, "verdict": "unreadable"}
+        return judged(RegistryVerdict.UNJUDGED,
+                      "the service address given is a loopback address, which no speakers "
+                      "use; pass the address the speakers call back to")
+    if set(advertised) != {RadioSource.TUNEIN, RadioSource.LOCAL_INTERNET_RADIO}:
+        return judged(RegistryVerdict.UNREADABLE)
     origins = {_origin(url) for url in advertised.values()}
-    if origins == {_origin(service)}:
-        return {**result, "verdict": "ok"}
+    if origins == {expected}:
+        return judged(RegistryVerdict.OK)
     if all(is_cloud_location(url) for url in advertised.values()):
-        return {**result, "verdict": "dns-mode"}
-    return {**result, "verdict": "foreign"}
+        return judged(RegistryVerdict.DNS_MODE)
+    return judged(RegistryVerdict.FOREIGN)
 
 
 def decode_playback_location(location: str) -> str:
@@ -386,7 +637,7 @@ def is_cloud_location(location: str) -> bool:
     return any(marker in host for marker in CLOUD_MARKERS)
 
 
-def harvest_presets(raw: str) -> list[dict[str, object]]:
+def harvest_presets(presets: Presets) -> list[PresetEntry]:
     """Turn a speaker's stored presets into template entries, saying which ones need research.
 
     An entry whose `location` is empty could not be resolved to a stream and is NOT a usable
@@ -397,24 +648,19 @@ def harvest_presets(raw: str) -> list[dict[str, object]]:
     over exactly as stored and marked `keep`: this skill does not manage it, and rewriting it as
     LOCAL_INTERNET_RADIO would turn the owner's album into a radio station without saying so.
     """
-    out: list[dict[str, object]] = []
-    for button, item in sorted(parse_preset_items(raw).items()):
-        name = preset_name(raw, button) or f"preset {button}"
-        if item["source"] and item["source"] not in RADIO_SOURCES:
-            out.append({"buttonNumber": button, "name": name, "location": item["location"],
-                        "contentItemType": item["type"], "source": item["source"], "keep": True})
+    out: list[PresetEntry] = []
+    for button, item in sorted(presets.items.items()):
+        name = item.name or f"preset {button}"
+        if item.source and item.source not in RADIO_SOURCES:
+            out.append(PresetEntry(button_number=button, name=name, location=item.location,
+                                   content_item_type=item.type, source=item.source, keep=True))
             continue
-        out.append({
-            "buttonNumber": button,
-            "name": name,
-            "location": stream_url_from_location(item["location"]),
-            "contentItemType": "stationurl",
-            "source": "LOCAL_INTERNET_RADIO",
-        })
+        out.append(PresetEntry(button_number=button, name=name,
+                               location=stream_url_from_location(item.location)))
     return out
 
 
-def preset_name(raw: str, button: int) -> str:
+def _preset_name(raw: str, button: int) -> str:
     """The itemName the speaker shows for one button, or "" when it has none."""
     for chunk in raw.split("<preset ")[1:]:
         if f'id="{button}"' not in chunk.split(">", 1)[0]:
@@ -426,7 +672,7 @@ def preset_name(raw: str, button: int) -> str:
     return ""
 
 
-def classify_stream(status: int | None, content_type: str, head: str) -> str:
+def classify_stream(status: int | None, content_type: str, head: str) -> StreamKind:
     """What a fetch of a candidate stream URL actually returned.
 
     The content type alone is not enough, and trusting it is the trap: an .m3u playlist is served
@@ -435,15 +681,15 @@ def classify_stream(status: int | None, content_type: str, head: str) -> str:
     resolving it gains nothing - the speaker cannot play a segment list.
     """
     if status is None or status >= 400:
-        return "dead"
+        return StreamKind.DEAD
     ctype = content_type.split(";", 1)[0].strip().lower()
     if "#EXT-X-" in head:
-        return "hls"
+        return StreamKind.HLS
     if ctype in PLAYLIST_TYPES or head.lstrip().startswith(("#EXTM3U", "[playlist]")):
-        return "playlist"
+        return StreamKind.PLAYLIST
     if ctype.startswith("audio/") or ctype in ("application/ogg", "video/mp2t"):
-        return "audio"
-    return "not-audio"
+        return StreamKind.AUDIO
+    return StreamKind.NOT_AUDIO
 
 
 def playlist_targets(body: str) -> list[str]:
@@ -459,15 +705,6 @@ def playlist_targets(body: str) -> list[str]:
     return found
 
 
-def parse_presets(raw: str) -> list[str]:
-    """Every location currently stored on the speaker, in document order."""
-    out: list[str] = []
-    for chunk in raw.split("<ContentItem")[1:]:
-        if 'location="' in chunk:
-            out.append(chunk.split('location="', 1)[1].split('"', 1)[0])
-    return out
-
-
 def _attr(tag: str, name: str) -> str:
     """One attribute's value from an opening tag, unescaped, or "" when the tag does not carry it.
 
@@ -478,15 +715,15 @@ def _attr(tag: str, name: str) -> str:
     return html.unescape(tag.split(marker, 1)[1].split('"', 1)[0]) if marker in tag else ""
 
 
-def parse_preset_items(raw: str) -> dict[int, dict[str, str]]:
-    """Which BUTTON holds what: its location, and the source and type that say what KIND it is.
+def parse_presets(raw: str) -> Presets:
+    """Read a speaker's /presets once: which BUTTON holds what, and every stored location.
 
     The speaker returns `<preset id="N">` wrapping each ContentItem, so the button number is on the
     outer tag. Reading only the locations loses it, and then a station sitting on the wrong button
     cannot be told apart from one that is correct. The source is what separates a radio station
     from an album, so dropping it flattens every preset into radio.
     """
-    items: dict[int, dict[str, str]] = {}
+    items: dict[int, PresetItem] = {}
     for chunk in raw.split("<preset ")[1:]:
         if 'id="' not in chunk or 'location="' not in chunk:
             continue
@@ -495,17 +732,15 @@ def parse_preset_items(raw: str) -> dict[int, dict[str, str]]:
         except ValueError:
             continue
         tag = " " + chunk.split("<ContentItem", 1)[-1].split(">", 1)[0]
-        items[button] = {"location": _attr(tag, "location"), "source": _attr(tag, "source"),
-                         "type": _attr(tag, "type")}
-    return items
+        items[button] = PresetItem(button=button, location=_attr(tag, "location"),
+                                   source=_attr(tag, "source"), type=_attr(tag, "type"),
+                                   name=_preset_name(raw, button))
+    locations = tuple(chunk.split('location="', 1)[1].split('"', 1)[0]
+                      for chunk in raw.split("<ContentItem")[1:] if 'location="' in chunk)
+    return Presets(items=items, locations=locations)
 
 
-def parse_preset_slots(raw: str) -> dict[int, str]:
-    """Which BUTTON currently holds which location."""
-    return {button: item["location"] for button, item in parse_preset_items(raw).items()}
-
-
-def slots_to_write(raw: str, wanted: list[dict[str, object]]) -> list[dict[str, object]]:
+def slots_to_write(presets: Presets, wanted: Sequence[PresetEntry]) -> list[PresetEntry]:
     """The template entries whose BUTTON does not already hold their stream.
 
     Two readings this rules out. Counting says six presets are present when one of them now points
@@ -518,14 +753,14 @@ def slots_to_write(raw: str, wanted: list[dict[str, object]]) -> list[dict[str, 
     location string, or decoding only one form, calls a correct slot missing forever, and a restore
     then rewrites the owner's button on every run. Entries marked `keep` are never written.
     """
-    slots = parse_preset_slots(raw)
-    return [p for p in wanted if not p.get("keep")
-            and stream_url_from_location(slots.get(int(str(p["buttonNumber"])), "")) != p["location"]]
+    slots = presets.slots()
+    return [p for p in wanted if not p.keep
+            and stream_url_from_location(slots.get(p.button_number, "")) != p.location]
 
 
-def missing_streams(raw: str, wanted: list[dict[str, object]]) -> list[str]:
+def missing_streams(presets: Presets, wanted: Sequence[PresetEntry]) -> list[str]:
     """Just the stream URLs from slots_to_write, for reporting."""
-    return [str(p["location"]) for p in slots_to_write(raw, wanted)]
+    return [p.location for p in slots_to_write(presets, wanted)]
 
 
 def port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
@@ -568,20 +803,16 @@ def _read_to_prompt(sock: socket.socket, timeout: float = 10.0) -> tuple[str, bo
     return buf.decode("utf-8", "replace"), False
 
 
-def telnet_run(ip: str, commands: list[str], settle: float = 0.2) -> list[dict[str, object]]:
-    """Send commands to the diagnostic port in order and collect each reply.
-
-    Each entry carries `complete`: False means the `->` prompt never arrived and the reply is
-    whatever had been received when the read timed out.
-    """
-    out: list[dict[str, object]] = []
+def telnet_run(ip: str, commands: list[str], settle: float = 0.2) -> list[TelnetReply]:
+    """Send commands to the diagnostic port in order and collect each reply."""
+    out: list[TelnetReply] = []
     try:
         with socket.create_connection((ip, TELNET_PORT), timeout=10) as sock:
             _read_to_prompt(sock, timeout=6)
             for cmd in commands:
                 sock.sendall(cmd.encode() + b"\r\n")
                 reply, complete = _read_to_prompt(sock)
-                out.append({"cmd": cmd, "reply": reply.strip(), "complete": complete})
+                out.append(TelnetReply(cmd=cmd, reply=reply.strip(), complete=complete))
                 time.sleep(settle)
     except OSError as exc:
         raise SpeakerError(f"diagnostic port {TELNET_PORT} on {ip}: {exc}") from exc
@@ -615,7 +846,7 @@ def http_date_header(ip: str, timeout: float = 8.0) -> str | None:
 
 
 def clock_state(header: str | None, now: float | None = None,
-                *, tolerance_s: int = CLOCK_TOLERANCE_S) -> dict[str, object]:
+                *, tolerance_s: int = CLOCK_TOLERANCE_S) -> ClockState:
     """Judge a speaker's clock from its Date header: ok, wrong, or unknown.
 
     `reading` is the wall clock the box itself reported, printed as the box printed it, because that
@@ -624,12 +855,12 @@ def clock_state(header: str | None, now: float | None = None,
     sufficient.
     """
     if not header:
-        return {"verdict": "unknown", "reading": None}
+        return ClockState(ClockVerdict.UNKNOWN, None)
     try:
         stamp = parsedate_to_datetime(header)
     except (TypeError, ValueError):
-        return {"verdict": "unknown", "reading": None}
+        return ClockState(ClockVerdict.UNKNOWN, None)
     epoch = stamp.timestamp()
     moment = time.time() if now is None else now
-    return {"verdict": "ok" if abs(epoch - moment) <= tolerance_s else "wrong",
-            "reading": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(epoch))}
+    return ClockState(ClockVerdict.OK if abs(epoch - moment) <= tolerance_s else ClockVerdict.WRONG,
+                      time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(epoch)))

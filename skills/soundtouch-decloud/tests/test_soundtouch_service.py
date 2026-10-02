@@ -101,4 +101,33 @@ def test_docker_report_reports_absence_without_raising(monkeypatch):
     """A machine with no Docker is the normal case this walks the owner through, not an error."""
     monkeypatch.setattr(S.shutil, "which", lambda _: None)
     rep = S.docker_report()
-    assert rep["docker"] is False and rep["compose"] is False
+    assert rep.docker is False and rep.compose is False
+    assert rep.to_json() == {"docker": False, "compose": False}
+
+
+def test_docker_report_serialises_only_the_keys_its_path_filled():
+    assert S.DockerReport(docker=True, compose=True, compose_version="v2").to_json() == {
+        "docker": True, "compose": True, "compose_version": "v2"}
+    assert S.DockerReport(docker=True, compose=False, compose_error="boom").to_json() == {
+        "docker": True, "compose": False, "compose_error": "boom"}
+
+
+def test_render_in_ports_mode_publishes_ports_and_drops_host_networking():
+    out = S.render_compose("192.0.2.10", network=S.Network.PORTS)
+    assert '"8000:8000"' in out and "network_mode" not in out
+
+
+def test_render_refuses_an_unknown_network_by_name():
+    with pytest.raises(ValueError, match="network must be 'host' or 'ports', got 'bridge'"):
+        S.render_compose("192.0.2.10", network="bridge")  # type: ignore[arg-type]
+
+
+def test_the_device_listing_counts_every_entry_but_names_only_objects():
+    listing = S.parse_devices([{"name": "Kitchen"}, 7, {"id": 1}])
+    assert listing == S.DeviceListing(count=3, names=("Kitchen", None))
+    assert listing is not None
+    assert listing.to_json() == {"devices": 3, "names": ["Kitchen", None]}
+
+
+def test_a_payload_that_is_not_a_list_is_not_a_device_listing():
+    assert S.parse_devices({"name": "x"}) is None

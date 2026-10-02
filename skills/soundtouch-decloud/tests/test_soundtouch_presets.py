@@ -1,13 +1,19 @@
 """Tests for template validation and the preset body that gets written."""
+import dataclasses
 import json
+
 import pytest
 import soundtouch_core as C
 import soundtouch_presets as P
+from soundtouch_core import PresetEntry
 
 GOOD = {"deviceId": "00005E005300", "name": "Example Speaker",
         "presets": [{"buttonNumber": 1, "name": "Example Radio",
                      "location": "https://radio.example.com/stream",
                      "contentItemType": "stationurl", "source": "LOCAL_INTERNET_RADIO"}]}
+# The first preset of GOOD, as the loader turns it into a typed entry.
+ENTRY = PresetEntry(button_number=1, name="Example Radio",
+                    location="https://radio.example.com/stream")
 
 
 def _write(tmp_path, data):
@@ -17,7 +23,7 @@ def _write(tmp_path, data):
 
 
 def test_a_good_template_loads(tmp_path):
-    assert len(P.load_template(_write(tmp_path, GOOD))["presets"]) == 1
+    assert P.load_template(_write(tmp_path, GOOD)) == [ENTRY]
 
 
 def test_a_template_with_no_presets_is_refused(tmp_path):
@@ -68,7 +74,7 @@ KEPT = {"buttonNumber": 2, "name": "An Album", "location": "/playback/container/
 def test_a_kept_entry_loads_without_a_stream_url(tmp_path):
     """A Spotify or library preset is not radio; demanding an http stream for it is the bug."""
     data = dict(GOOD, presets=[GOOD["presets"][0], KEPT])
-    assert len(P.load_template(_write(tmp_path, data))["presets"]) == 2
+    assert len(P.load_template(_write(tmp_path, data))) == 2
 
 
 def test_validate_reports_a_kept_entry_as_kept_not_unplayable(tmp_path, capsys):
@@ -82,7 +88,7 @@ def test_preset_xml_wraps_the_location_as_the_player_does():
     """A raw stream URL here is accepted by the speaker and never plays. The wrapping is the
     relative Orion form AfterTouch's own player and CLI write since v0.138.0, so there is one
     format on the account and the preset follows the service to a new address."""
-    xml = P.preset_xml(GOOD["presets"][0])
+    xml = P.preset_xml(ENTRY)
     assert 'location="/station?data=' in xml
     assert "192.0.2.10" not in xml
     assert 'location="https://radio.example.com/stream"' not in xml
@@ -90,18 +96,18 @@ def test_preset_xml_wraps_the_location_as_the_player_does():
 
 def test_preset_xml_writes_the_absolute_form_only_when_given_a_service():
     """The fallback for firmware that cannot resolve a relative location."""
-    xml = P.preset_xml(GOOD["presets"][0], service="http://192.0.2.10:8000")
+    xml = P.preset_xml(ENTRY, service="http://192.0.2.10:8000")
     assert 'location="http://192.0.2.10:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=' in xml
 
 
 def test_preset_xml_escapes_the_station_name():
-    entry = dict(GOOD["presets"][0], name="Rock & Roll <FM>")
+    entry = dataclasses.replace(ENTRY, name="Rock & Roll <FM>")
     xml = P.preset_xml(entry)
     assert "<itemName>Rock &amp; Roll &lt;FM&gt;</itemName>" in xml
 
 
 def test_preset_xml_carries_the_source_and_type():
-    xml = P.preset_xml(GOOD["presets"][0])
+    xml = P.preset_xml(ENTRY)
     assert 'source="LOCAL_INTERNET_RADIO"' in xml and 'type="stationurl"' in xml
 
 

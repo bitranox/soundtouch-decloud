@@ -11,6 +11,7 @@ import urllib.parse
 import pytest
 import soundtouch_core as C
 import soundtouch_presets as P
+from soundtouch_core import PresetEntry, StreamKind
 
 
 def _cloud(name: str, stream: str) -> str:
@@ -83,16 +84,16 @@ def test_is_cloud_location_knows_the_dead_hosts():
 # --- harvest ---------------------------------------------------------------------------------
 
 def test_harvest_recovers_the_stream_and_keeps_button_and_name():
-    entries = C.harvest_presets(PREMIGRATION)
-    assert entries[0] == {"buttonNumber": 1, "name": "Example Radio",
+    entries = C.harvest_presets(C.parse_presets(PREMIGRATION))
+    assert entries[0].to_json() == {"buttonNumber": 1, "name": "Example Radio",
                           "location": "https://radio.example.com/live",
                           "contentItemType": "stationurl", "source": "LOCAL_INTERNET_RADIO"}
 
 
 def test_harvest_leaves_a_hole_rather_than_dropping_a_station_it_cannot_resolve():
-    entries = C.harvest_presets(PREMIGRATION)
-    assert entries[1]["location"] == ""
-    assert entries[1]["name"] == "Catalogue Station"
+    entries = C.harvest_presets(C.parse_presets(PREMIGRATION))
+    assert entries[1].location == ""
+    assert entries[1].name == "Catalogue Station"
 
 
 @pytest.mark.parametrize(("button", "source", "ctype", "location"), [
@@ -101,15 +102,15 @@ def test_harvest_leaves_a_hole_rather_than_dropping_a_station_it_cannot_resolve(
 ])
 def test_harvest_keeps_a_non_radio_preset_exactly_as_it_was(button, source, ctype, location):
     """Flattening these to LOCAL_INTERNET_RADIO turned an album into a named radio hole."""
-    entry = next(e for e in C.harvest_presets(PREMIGRATION) if e["buttonNumber"] == button)
-    assert entry["keep"] is True
-    assert (entry["source"], entry["contentItemType"], entry["location"]) == (source, ctype, location)
+    entry = next(e for e in C.harvest_presets(C.parse_presets(PREMIGRATION)) if e.button_number == button)
+    assert entry.keep is True
+    assert (entry.source, entry.content_item_type, entry.location) == (source, ctype, location)
 
 
 def test_harvest_does_not_mark_a_radio_preset_as_kept():
     """A TUNEIN hole is radio to research, not something to leave alone."""
-    entries = C.harvest_presets(PREMIGRATION)
-    assert "keep" not in entries[0] and "keep" not in entries[1]
+    entries = C.harvest_presets(C.parse_presets(PREMIGRATION))
+    assert "keep" not in entries[0].to_json() and "keep" not in entries[1].to_json()
 
 
 def test_harvest_reports_kept_presets_as_resolved_not_as_holes(tmp_path, capsys):
@@ -127,20 +128,21 @@ def test_harvest_unescapes_what_the_speaker_escaped():
     raw = ('<presets><preset id="1"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
            'location="https://radio.example.com/s?a=1&amp;b=2" sourceAccount="">'
            "<itemName>Rock &amp; Roll &lt;FM&gt;</itemName></ContentItem></preset></presets>")
-    entry = C.harvest_presets(raw)[0]
-    assert (entry["name"], entry["location"]) == ("Rock & Roll <FM>", "https://radio.example.com/s?a=1&b=2")
+    entry = C.harvest_presets(C.parse_presets(raw))[0]
+    assert (entry.name, entry.location) == ("Rock & Roll <FM>", "https://radio.example.com/s?a=1&b=2")
 
 
 def test_a_bare_url_with_an_escaped_ampersand_still_compares_equal():
     raw = ('<presets><preset id="1"><ContentItem source="LOCAL_INTERNET_RADIO" '
            'location="https://radio.example.com/s?a=1&amp;b=2" /></preset></presets>')
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://radio.example.com/s?a=1&b=2"}]
-    assert C.slots_to_write(raw, wanted) == []
+    wanted = [PresetEntry(button_number=1, name="A", location="https://radio.example.com/s?a=1&b=2")]
+    assert C.slots_to_write(C.parse_presets(raw), wanted) == []
 
 
-def test_preset_name_reads_the_button_it_was_asked_for():
-    assert C.preset_name(PREMIGRATION, 2) == "Catalogue Station"
-    assert C.preset_name(PREMIGRATION, 5) == ""
+def test_parsing_names_each_button_from_its_own_slot():
+    items = C.parse_presets(PREMIGRATION).items
+    assert items[2].name == "Catalogue Station"
+    assert 5 not in items
 
 
 # --- what came back --------------------------------------------------------------------------
@@ -189,13 +191,13 @@ def _canned(responses):
 
 def test_a_live_stream_is_playable():
     fetch = _canned({"http://a.example/s": (200, "audio/mpeg", "ID3")})
-    assert P.stream_verdict("http://a.example/s", fetch=fetch)["playable"] is True
+    assert P.stream_verdict("http://a.example/s", fetch=fetch).playable is True
 
 
 def test_a_dead_stream_is_reported_with_its_status():
     fetch = _canned({"http://a.example/s": (404, "", "")})
     verdict = P.stream_verdict("http://a.example/s", fetch=fetch)
-    assert (verdict["playable"], verdict["verdict"], verdict["status"]) == (False, "dead", 404)
+    assert (verdict.playable, verdict.verdict, verdict.status) == (False, StreamKind.DEAD, 404)
 
 
 def test_a_playlist_is_followed_one_level_to_the_real_stream():
@@ -204,9 +206,9 @@ def test_a_playlist_is_followed_one_level_to_the_real_stream():
         "http://a.example/s": (200, "audio/mpeg", "ID3"),
     })
     verdict = P.stream_verdict("http://a.example/list.m3u", fetch=fetch)
-    assert verdict["playable"] is True
-    assert verdict["url"] == "http://a.example/list.m3u"
-    assert verdict["resolved_to"] == "http://a.example/s"
+    assert verdict.playable is True
+    assert verdict.url == "http://a.example/list.m3u"
+    assert verdict.resolved_to == "http://a.example/s"
 
 
 def test_a_playlist_of_playlists_is_not_followed_forever():
@@ -215,19 +217,19 @@ def test_a_playlist_of_playlists_is_not_followed_forever():
         "http://a.example/2.m3u": (200, "audio/x-mpegurl", "#EXTM3U\nhttp://a.example/s"),
     })
     verdict = P.stream_verdict("http://a.example/1.m3u", fetch=fetch)
-    assert verdict["playable"] is False
-    assert verdict["verdict"] == "playlist"
+    assert verdict.playable is False
+    assert verdict.verdict == StreamKind.PLAYLIST
 
 
 def test_an_empty_playlist_is_reported_rather_than_followed():
     fetch = _canned({"http://a.example/l.m3u": (200, "audio/x-mpegurl", "#EXTM3U\n")})
-    assert P.stream_verdict("http://a.example/l.m3u", fetch=fetch)["playable"] is False
+    assert P.stream_verdict("http://a.example/l.m3u", fetch=fetch).playable is False
 
 
 def test_a_landing_page_is_not_mistaken_for_a_station():
     fetch = _canned({"http://a.example/s": (200, "text/html", "<html>Listen live</html>")})
     verdict = P.stream_verdict("http://a.example/s", fetch=fetch)
-    assert (verdict["playable"], verdict["verdict"]) == (False, "not-audio")
+    assert (verdict.playable, verdict.verdict) == (False, StreamKind.NOT_AUDIO)
 
 
 # --- a template with holes cannot be written to a speaker ---------------------------------------
@@ -256,7 +258,7 @@ def test_a_station_id_left_in_place_is_refused_too(tmp_path):
 
 def test_the_lenient_reader_accepts_the_file_harvest_just_wrote(tmp_path):
     """validate has to be able to read the very holes it exists to report."""
-    assert len(P.load_partial_template(_write(tmp_path, _template("")))["presets"]) == 1
+    assert len(P.load_partial_template(_write(tmp_path, _template("")))) == 1
 
 
 # --- the CLI ------------------------------------------------------------------------------------
@@ -296,8 +298,8 @@ def _explodes(url, timeout=8.0):
 def test_an_unresearched_hole_is_missing_not_dead():
     """`dead` and `missing` call for opposite actions, and fetching "" cannot tell them apart."""
     verdict = P.stream_verdict("", fetch=_explodes)
-    assert verdict["verdict"] == "missing"
-    assert verdict["playable"] is False
+    assert verdict.verdict == StreamKind.MISSING
+    assert verdict.playable is False
 
 
 def test_validate_reports_a_hole_without_calling_it_dead(tmp_path, capsys):

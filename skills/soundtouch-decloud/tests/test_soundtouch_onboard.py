@@ -2,43 +2,54 @@
 import json
 
 import soundtouch_onboard as O
+from soundtouch_core import ServiceUrls, TelnetReply, UrlField
 
-LOCAL = {"margeServerUrl": "http://192.0.2.10:8000",
-         "statsServerUrl": "http://192.0.2.10:8000",
-         "swUpdateUrl": "http://192.0.2.10:8000/updates/soundtouch",
-         "bmxRegistryUrl": "http://192.0.2.10:8000/bmx/registry/v1/services"}
+LOCAL = {UrlField.MARGE: "http://192.0.2.10:8000",
+         UrlField.STATS: "http://192.0.2.10:8000",
+         UrlField.SW_UPDATE: "http://192.0.2.10:8000/updates/soundtouch",
+         UrlField.BMX_REGISTRY: "http://192.0.2.10:8000/bmx/registry/v1/services"}
+
+
+def _urls(**changes: str | None) -> ServiceUrls:
+    """The fully local speaker with fields replaced; a value of None drops the field."""
+    merged = dict(LOCAL)
+    for name, value in changes.items():
+        field = UrlField(name)
+        if value is None:
+            del merged[field]
+        else:
+            merged[field] = value
+    return ServiceUrls(merged)
 
 
 def test_a_fully_local_speaker_passes():
-    assert O.migration_verdict(dict(LOCAL))["ok"] is True
+    assert O.migration_verdict(_urls()).ok is True
 
 
 def test_one_cloud_url_fails_even_though_the_others_are_local():
     """This is the case that looks migrated and plays nothing."""
-    urls = dict(LOCAL, bmxRegistryUrl="https://content.api.bose.io/bmx/registry/v1/services")
+    urls = _urls(bmxRegistryUrl="https://content.api.bose.io/bmx/registry/v1/services")
     verdict = O.migration_verdict(urls)
-    assert verdict["ok"] is False
-    assert "bmxRegistryUrl" in verdict["cloud_leftovers"]
+    assert verdict.ok is False
+    assert "bmxRegistryUrl" in verdict.to_json()["cloud_leftovers"]
 
 
 def test_leftover_injection_fails_even_when_no_cloud_url_remains():
-    urls = dict(LOCAL, margeServerUrl="http://192.0.2.10:8000;touch /tmp/remote_services")
+    urls = _urls(margeServerUrl="http://192.0.2.10:8000;touch /tmp/remote_services")
     verdict = O.migration_verdict(urls)
-    assert verdict["ok"] is False
-    assert "margeServerUrl" in verdict["still_injected"]
+    assert verdict.ok is False
+    assert "margeServerUrl" in verdict.to_json()["still_injected"]
 
 
 def test_a_missing_field_fails():
-    urls = dict(LOCAL)
-    del urls["statsServerUrl"]
-    verdict = O.migration_verdict(urls)
-    assert verdict["ok"] is False
-    assert verdict["missing"] == ["statsServerUrl"]
+    verdict = O.migration_verdict(_urls(statsServerUrl=None))
+    assert verdict.ok is False
+    assert verdict.to_json()["missing"] == ["statsServerUrl"]
 
 
 def test_an_empty_read_is_not_a_pass():
     """Reading nothing back must never look like a clean speaker."""
-    assert O.migration_verdict({})["ok"] is False
+    assert O.migration_verdict(ServiceUrls({})).ok is False
 
 
 def test_wait_down_returns_none_when_the_speaker_never_drops(monkeypatch):
@@ -92,11 +103,17 @@ class FakeBox:
             self.source, self.station = "LOCAL_INTERNET_RADIO", "Last Station"
 
 
+def _reset_volume(box: FakeBox) -> list[TelnetReply]:
+    """What a reboot command does to the box: the volume falls back to the factory 10."""
+    box.volume = 10
+    return []
+
+
 def _box(monkeypatch, box: FakeBox, *, back: bool = True) -> None:
     monkeypatch.setattr(O, "http_get", box.get)
     monkeypatch.setattr(O, "_post", box.post)
     monkeypatch.setattr(O, "_key", box.key)
-    monkeypatch.setattr(O, "telnet_run", lambda _ip, _cmds: box.__setattr__("volume", 10) or [])
+    monkeypatch.setattr(O, "telnet_run", lambda _ip, _cmds: _reset_volume(box))
     monkeypatch.setattr(O, "wait_down", lambda *_a, **_k: 4.0)
     monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 60.0 if back else None)
     monkeypatch.setattr(O.time, "sleep", lambda _s: None)
@@ -152,3 +169,15 @@ def test_an_unreadable_volume_before_the_reboot_does_not_fail_it(monkeypatch, ca
     monkeypatch.setattr(O, "http_get", get)
     assert O.main(["--ip", "192.0.2.31", "reboot", "--confirm"]) == 0
     assert json.loads(capsys.readouterr().out)["data"]["volume_before"] is None
+
+
+def test_the_verdict_envelope_keeps_its_key_order():
+    """The CLI contract: urls, cloud_leftovers, still_injected, missing, ok - in that order."""
+    assert list(O.migration_verdict(_urls()).to_json()) == [
+        "urls", "cloud_leftovers", "still_injected", "missing", "ok"]
+
+
+def test_now_playing_defaults_when_the_speaker_leaves_fields_out():
+    reading = O.parse_now_playing("<nowPlaying></nowPlaying>")
+    assert (reading.source, reading.play_status, reading.item_name) == ("", "-", "-")
+    assert not reading.is_standby and not reading.is_playing

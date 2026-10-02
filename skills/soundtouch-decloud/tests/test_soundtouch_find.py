@@ -2,107 +2,138 @@
 import json
 
 import soundtouch_find as F
+from soundtouch_core import (
+    API_PORT,
+    SSH_PORT,
+    TELNET_PORT,
+    ClockState,
+    ClockVerdict,
+    RadioSource,
+    RadioSources,
+    RegistryCheck,
+    RegistryVerdict,
+    ServiceUrls,
+    TelnetReply,
+    UrlField,
+)
 
 READY_SOURCES = {"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "READY", "RADIO_BROWSER": "READY"}
+OPEN_PORTS = {SSH_PORT: False, TELNET_PORT: True, API_PORT: True}
+CLOUD = {"bmxRegistryUrl": "https://x.bose.io/y"}
 
 
-def _state(**over):
-    base = {"ports": {"22": False, "17000": True, "8090": True}, "cloud_leftovers": {},
-            "account": "1234567", "sources": dict(READY_SOURCES), "preset_count": 6}
-    base.update(over)
-    return base
+def _sources(statuses=None) -> RadioSources:
+    return RadioSources({RadioSource(k): v for k, v in (statuses or READY_SOURCES).items()})
+
+
+def _urls(values) -> ServiceUrls:
+    return ServiceUrls({UrlField(k): v for k, v in values.items()})
+
+
+def _state(*, ports=None, cloud_leftovers=None, account="1234567", sources=None, preset_count=6,
+           registry=None, clock=None, registry_verdict_word=None, clock_verdict_word=None,
+           clock_reading=None) -> F.SpeakerState:
+    """A fully healthy answering speaker, with the named parts swapped."""
+    if registry_verdict_word is not None:
+        registry = RegistryCheck(verdict=RegistryVerdict(registry_verdict_word))
+    if clock_verdict_word is not None:
+        clock = ClockState(ClockVerdict(clock_verdict_word), clock_reading)
+    return F.SpeakerState(
+        ip="192.0.2.31", ports=OPEN_PORTS if ports is None else ports,
+        info=F.DeviceInfo(name="Room1", device_id="AABBCC0000A1", account=account),
+        urls=_urls(cloud_leftovers or {}), cloud_leftovers=_urls(cloud_leftovers or {}),
+        registry=registry, sources=_sources(sources), preset_count=preset_count, clock=clock)
 
 
 def test_a_speaker_that_does_not_answer_is_not_answering():
-    assert F.classify(_state(ports={"8090": False, "17000": False, "22": False})) == "not-answering"
+    assert F.classify(_state(ports={API_PORT: False, TELNET_PORT: False, SSH_PORT: False})) == F.SpeakerVerdict.NOT_ANSWERING
 
 
 def test_cloud_urls_mean_it_needs_migration():
-    assert F.classify(_state(cloud_leftovers={"bmxRegistryUrl": "https://x.bose.io/y"})) == "needs-migration"
+    assert F.classify(_state(cloud_leftovers=CLOUD)) == F.SpeakerVerdict.NEEDS_MIGRATION
 
 
 def test_no_account_is_reported_before_blaming_the_sources():
     """Without an account the speaker never contacts the service at all, so it outranks sources."""
-    assert F.classify(_state(account="", sources={"TUNEIN": "ABSENT"})) == "needs-account"
+    assert F.classify(_state(account="", sources={"TUNEIN": "ABSENT"})) == F.SpeakerVerdict.NEEDS_ACCOUNT
 
 
 def test_unmounted_sources_are_their_own_verdict():
     assert F.classify(_state(sources={"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "ABSENT",
-                                      "RADIO_BROWSER": "READY"})) == "sources-not-ready"
+                                      "RADIO_BROWSER": "READY"})) == F.SpeakerVerdict.SOURCES_NOT_READY
 
 
 def test_no_presets_is_its_own_verdict():
-    assert F.classify(_state(preset_count=0)) == "needs-presets"
+    assert F.classify(_state(preset_count=0)) == F.SpeakerVerdict.NEEDS_PRESETS
 
 
 def test_a_working_speaker_is_ready():
-    assert F.classify(_state()) == "ready"
+    assert F.classify(_state()) == F.SpeakerVerdict.READY
 
 
 def test_every_verdict_has_owner_facing_advice():
-    for verdict in ("not-answering", "needs-migration", "registry-foreign", "needs-account",
-                    "sources-not-ready", "needs-presets", "ready"):
+    for verdict in F.SpeakerVerdict:
         text = F.describe_state(verdict)
         assert text != verdict and len(text) > 20
 
 
 def test_the_not_answering_advice_tells_the_owner_to_wake_it():
     """The commonest cause is a speaker idling, and pressing a button is the cheapest fix."""
-    assert "press a button" in F.describe_state("not-answering").lower()
+    assert "press a button" in F.describe_state(F.SpeakerVerdict.NOT_ANSWERING).lower()
 
 
 def test_the_sources_advice_gives_a_real_wait():
-    assert "80" in F.describe_state("sources-not-ready")
+    assert "80" in F.describe_state(F.SpeakerVerdict.SOURCES_NOT_READY)
 
 
 def test_a_clock_left_in_2015_is_named_rather_than_called_ready():
     """Everything else green and no sound from any https station: the clock is the fault."""
-    assert F.classify(_state(clock={"verdict": "wrong", "reading": "2015-07-06 20:36:50"})) \
-        == "clock-wrong"
+    assert F.classify(_state(clock_verdict_word="wrong", clock_reading="2015-07-06 20:36:50")) \
+        == F.SpeakerVerdict.CLOCK_WRONG
 
 
 def test_a_clock_that_could_not_be_read_changes_no_verdict():
     """A speaker that answered nothing about its clock must not be reported as broken."""
-    assert F.classify(_state(clock={"verdict": "unknown", "reading": None})) == "ready"
+    assert F.classify(_state(clock_verdict_word="unknown")) == F.SpeakerVerdict.READY
 
 
 def test_a_structural_fault_outranks_a_wrong_clock():
     """Rewriting the service URLs comes first; the clock cannot be judged from a migrated box."""
-    assert F.classify(_state(cloud_leftovers={"bmxRegistryUrl": "https://x.bose.io/y"},
-                             clock={"verdict": "wrong", "reading": "2015-07-06 20:36:50"})) \
-        == "needs-migration"
+    assert F.classify(_state(cloud_leftovers=CLOUD,
+                             clock_verdict_word="wrong", clock_reading="2015-07-06 20:36:50")) \
+        == F.SpeakerVerdict.NEEDS_MIGRATION
 
 
 def test_the_clock_advice_names_the_symptom_and_the_repair():
-    text = F.describe_state("clock-wrong").lower()
+    text = F.describe_state(F.SpeakerVerdict.CLOCK_WRONG).lower()
     assert "https" in text or "internet radio" in text
     assert text != "clock-wrong" and len(text) > 20
 
 
 def test_a_registry_sending_the_speaker_elsewhere_is_named():
     """Every URL reads migrated, sources read READY, and radio is broken: only this says why."""
-    assert F.classify(_state(registry={"verdict": "foreign"})) == "registry-foreign"
+    assert F.classify(_state(registry_verdict_word="foreign")) == F.SpeakerVerdict.REGISTRY_FOREIGN
 
 
 def test_the_registry_fault_ranks_below_migration_and_above_everything_else():
-    assert F.classify(_state(registry={"verdict": "foreign"},
-                             cloud_leftovers={"bmxRegistryUrl": "https://x.bose.io/y"})) == "needs-migration"
-    assert F.classify(_state(registry={"verdict": "foreign"}, account="")) == "registry-foreign"
+    assert F.classify(_state(registry_verdict_word="foreign",
+                             cloud_leftovers=CLOUD)) == F.SpeakerVerdict.NEEDS_MIGRATION
+    assert F.classify(_state(registry_verdict_word="foreign", account="")) == F.SpeakerVerdict.REGISTRY_FOREIGN
 
 
 def test_an_unreadable_or_dns_mode_registry_leaves_the_verdict_alone():
     """Not knowing is not a fault, and DNS mode names the Bose cloud on purpose."""
-    assert F.classify(_state(registry={"verdict": "unreadable"})) == "ready"
-    assert F.classify(_state(registry={"verdict": "dns-mode"})) == "ready"
+    assert F.classify(_state(registry_verdict_word="unreadable")) == F.SpeakerVerdict.READY
+    assert F.classify(_state(registry_verdict_word="dns-mode")) == F.SpeakerVerdict.READY
 
 
 def test_the_registry_advice_names_the_file_that_causes_it():
-    assert "settings.json" in F.describe_state("registry-foreign")
+    assert "settings.json" in F.describe_state(F.SpeakerVerdict.REGISTRY_FOREIGN)
 
 
 def test_the_registry_advice_says_the_speakers_must_restart():
     """A fixed registry is invisible to a speaker until it reboots; every check reads ok before."""
-    assert "restart every speaker" in F.describe_state("registry-foreign")
+    assert "restart every speaker" in F.describe_state(F.SpeakerVerdict.REGISTRY_FOREIGN)
 
 
 GETPDO_OURS = """CurrentSystemConfiguration {
@@ -134,7 +165,7 @@ def _fake_speaker(monkeypatch, registry_host: str) -> list[str]:
 
     monkeypatch.setattr(F, "port_open", lambda *_a, **_k: True)
     monkeypatch.setattr(F, "http_get", get)
-    monkeypatch.setattr(F, "telnet_run", lambda _ip, cmds: [{"cmd": cmds[0], "reply": GETPDO_OURS}])
+    monkeypatch.setattr(F, "telnet_run", lambda _ip, cmds: [TelnetReply(cmd=cmds[0], reply=GETPDO_OURS, complete=True)])
     monkeypatch.setattr(F, "http_date_header", lambda _ip: None)
     return fetched
 
@@ -143,10 +174,10 @@ def test_speaker_state_reads_the_registry_the_speaker_itself_uses(monkeypatch):
     fetched = _fake_speaker(monkeypatch, "http://192.0.2.99:8000")
     state = F.speaker_state("192.0.2.31")
     assert "http://192.0.2.10:8000/bmx/registry/v1/services" in fetched
-    assert state["verdict"] == "registry-foreign"
-    assert state["registry"]["advertised"]["TUNEIN"].startswith("http://192.0.2.99:8000")
+    assert state.verdict == F.SpeakerVerdict.REGISTRY_FOREIGN
+    assert state.registry.advertised["TUNEIN"].startswith("http://192.0.2.99:8000")
 
 
 def test_speaker_state_with_its_own_registry_is_ready(monkeypatch):
     _fake_speaker(monkeypatch, "http://192.0.2.10:8000")
-    assert F.speaker_state("192.0.2.31")["verdict"] == "ready"
+    assert F.speaker_state("192.0.2.31").verdict == F.SpeakerVerdict.READY

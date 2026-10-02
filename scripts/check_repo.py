@@ -20,6 +20,8 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
+from typing import cast
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
@@ -34,7 +36,33 @@ __all__ = ["check_manifests", "check_skill", "check_tests_exist", "check_line_en
            "check_no_typographic_tells", "run_checks", "main"]
 
 
-def _load_json(path: pathlib.Path, root: pathlib.Path) -> tuple[dict | None, list[str]]:
+@dataclass(frozen=True)
+class PluginManifest:
+    """The two plugin.json fields the checks read; `None` marks an absent key.
+
+    Values stay `object` because the checks report whatever the file held, wrong types included.
+    """
+
+    name: object
+    version: object
+
+
+@dataclass(frozen=True)
+class MarketplaceManifest:
+    """The plugin names marketplace.json lists, in file order (`None` for a nameless entry)."""
+
+    plugin_names: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class Frontmatter:
+    """The SKILL.md frontmatter fields the router needs; `name` is None when the key is absent."""
+
+    name: str | None
+    description: str
+
+
+def _read_json(path: pathlib.Path, root: pathlib.Path) -> tuple[object, list[str]]:
     """Parse a manifest, reporting a bad one as a failure rather than a traceback.
 
     The root is passed rather than read from the module constant so the message names a path under
@@ -47,30 +75,60 @@ def _load_json(path: pathlib.Path, root: pathlib.Path) -> tuple[dict | None, lis
         return None, [f"{path.relative_to(root)}: {exc}"]
 
 
+def _as_object(raw: object) -> dict[str, object]:
+    """A parsed JSON document as a mapping; any other top-level shape reads as having no keys."""
+    if not isinstance(raw, dict):
+        return {}
+    return cast("dict[str, object]", raw)
+
+
+def _load_plugin(path: pathlib.Path, root: pathlib.Path) -> tuple[PluginManifest | None, list[str]]:
+    """Parse plugin.json once into a model, or None plus the failure."""
+    raw, fails = _read_json(path, root)
+    if fails:
+        return None, fails
+    data = _as_object(raw)
+    return PluginManifest(name=data.get("name"), version=data.get("version")), []
+
+
+def _load_marketplace(
+    path: pathlib.Path, root: pathlib.Path
+) -> tuple[MarketplaceManifest | None, list[str]]:
+    """Parse marketplace.json once into a model, or None plus the failure."""
+    raw, fails = _read_json(path, root)
+    if fails:
+        return None, fails
+    plugins = _as_object(raw).get("plugins", [])
+    entries = cast("list[object]", plugins) if isinstance(plugins, list) else []
+    return MarketplaceManifest(
+        plugin_names=tuple(_as_object(entry).get("name") for entry in entries)), []
+
+
 def check_manifests(root: pathlib.Path) -> list[str]:
     """The two manifests must agree with each other and with the directory they ship."""
-    plugin, fails = _load_json(root / ".claude-plugin" / "plugin.json", root)
-    market, more = _load_json(root / ".claude-plugin" / "marketplace.json", root)
+    plugin, fails = _load_plugin(root / ".claude-plugin" / "plugin.json", root)
+    market, more = _load_marketplace(root / ".claude-plugin" / "marketplace.json", root)
     fails += more
     if plugin is None or market is None:
         return fails
-    if not SEMVER.match(str(plugin.get("version", ""))):
-        fails.append(f"plugin.json version {plugin.get('version')!r} is not X.Y.Z")
-    listed = [p.get("name") for p in market.get("plugins", [])]
-    if listed != [plugin.get("name")]:
-        fails.append(f"marketplace.json lists {listed}, plugin.json is {plugin.get('name')!r}")
-    if plugin.get("name") != root.name:
-        fails.append(f"plugin.json name {plugin.get('name')!r} is not the repo dir {root.name!r}")
+    if not SEMVER.match(str(plugin.version if plugin.version is not None else "")):
+        fails.append(f"plugin.json version {plugin.version!r} is not X.Y.Z")
+    listed = list(market.plugin_names)
+    if listed != [plugin.name]:
+        fails.append(f"marketplace.json lists {listed}, plugin.json is {plugin.name!r}")
+    if plugin.name != root.name:
+        fails.append(f"plugin.json name {plugin.name!r} is not the repo dir {root.name!r}")
     return fails
 
 
-def _frontmatter(text: str) -> dict[str, str]:
-    """The YAML-ish frontmatter as a flat mapping. Only `name` and `description` are ever used."""
-    if not text.startswith("---\n"):
-        return {}
-    body = text.split("---\n", 2)[1]
-    return {k.strip(): v.strip()
-            for k, _, v in (line.partition(":") for line in body.splitlines()) if k.strip()}
+def _frontmatter(text: str) -> Frontmatter:
+    """The YAML-ish frontmatter reduced to the `name` and `description` the checks use."""
+    fields: dict[str, str] = {}
+    if text.startswith("---\n"):
+        body = text.split("---\n", 2)[1]
+        fields = {k.strip(): v.strip()
+                  for k, _, v in (line.partition(":") for line in body.splitlines()) if k.strip()}
+    return Frontmatter(name=fields.get("name"), description=fields.get("description", ""))
 
 
 def check_skill(root: pathlib.Path) -> list[str]:
@@ -80,10 +138,10 @@ def check_skill(root: pathlib.Path) -> list[str]:
         return [f"expected exactly one skills/*/SKILL.md, found {len(skills)}"]
     skill = skills[0]
     front = _frontmatter(skill.read_text(encoding="utf-8"))
-    fails = []
-    if front.get("name") != skill.parent.name:
-        fails.append(f"SKILL.md name {front.get('name')!r} is not its dir {skill.parent.name!r}")
-    description = front.get("description", "")
+    fails: list[str] = []
+    if front.name != skill.parent.name:
+        fails.append(f"SKILL.md name {front.name!r} is not its dir {skill.parent.name!r}")
+    description = front.description
     if not description.startswith("Use when"):
         fails.append("SKILL.md description must start with 'Use when' so the router can match it")
     if len(description) > DESCRIPTION_MAX:
@@ -95,7 +153,7 @@ def check_skill(root: pathlib.Path) -> list[str]:
 
 def check_tests_exist(root: pathlib.Path) -> list[str]:
     """Every shipped script needs a test that actually names it."""
-    fails = []
+    fails: list[str] = []
     for skill in sorted((root / "skills").glob("*/SKILL.md")):
         tests = list(skill.parent.glob("tests/test_*.py"))
         corpus = "\n".join(t.read_text(encoding="utf-8") for t in tests)
@@ -138,7 +196,7 @@ def check_line_endings(root: pathlib.Path) -> list[str]:
 
 def check_no_typographic_tells(root: pathlib.Path) -> list[str]:
     """House style is ASCII: no em-dash, curly quote, ellipsis, non-breaking space or BOM."""
-    fails = []
+    fails: list[str] = []
     for path in _tracked_text_files(root):
         found = sorted({c for c in path.read_text(encoding="utf-8") if c in TELLS})
         if found:

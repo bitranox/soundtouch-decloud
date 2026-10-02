@@ -8,6 +8,14 @@ import json
 
 import pytest
 import soundtouch_core as C
+from soundtouch_core import (
+    ClockVerdict,
+    PresetEntry,
+    RadioSource,
+    RegistryVerdict,
+    ServiceUrls,
+    UrlField,
+)
 
 # getpdo puts the value on the line AFTER the field name.
 GETPDO = """->getpdo CurrentSystemConfiguration
@@ -39,8 +47,8 @@ SOURCES = (
 
 def test_parse_urls_reads_the_value_from_the_following_line():
     urls = C.parse_urls(GETPDO)
-    assert urls["margeServerUrl"] == "http://192.0.2.10:8000"
-    assert urls["bmxRegistryUrl"] == "https://content.api.bose.io/bmx/registry/v1/services"
+    assert urls.get(UrlField.MARGE) == "http://192.0.2.10:8000"
+    assert urls.get(UrlField.BMX_REGISTRY) == "https://content.api.bose.io/bmx/registry/v1/services"
     assert len(urls) == 4
 
 
@@ -49,38 +57,39 @@ def test_parse_urls_ignores_a_field_with_no_value():
 
 
 def test_parse_urls_of_empty_input_is_empty():
-    assert C.parse_urls("") == {}
+    assert not C.parse_urls("")
 
 
 def test_cloud_leftovers_flags_every_bose_domain():
     """Clearing only bose.com leaves bmxRegistryUrl on bose.io, and radio never mounts."""
-    left = C.cloud_leftovers(C.parse_urls(GETPDO))
-    assert set(left) == {"statsServerUrl", "bmxRegistryUrl"}
+    left = C.parse_urls(GETPDO).cloud_leftovers()
+    assert set(left.to_json()) == {"statsServerUrl", "bmxRegistryUrl"}
 
 
 def test_cloud_leftovers_empty_when_fully_local():
-    assert C.cloud_leftovers(C.service_urls("http://192.0.2.10:8000")) == {}
+    assert C.service_urls("http://192.0.2.10:8000").cloud_leftovers().to_json() == {}
 
 
 def test_injected_values_spots_leftover_shell_text():
-    urls = {"margeServerUrl": "http://192.0.2.10:8000;touch /tmp/x", "swUpdateUrl": "http://192.0.2.10:8000"}
-    assert list(C.injected_values(urls)) == ["margeServerUrl"]
+    urls = ServiceUrls({UrlField.MARGE: "http://192.0.2.10:8000;touch /tmp/x",
+                        UrlField.SW_UPDATE: "http://192.0.2.10:8000"})
+    assert list(urls.injected().to_json()) == ["margeServerUrl"]
 
 
 def test_parse_sources_matches_the_attribute_not_a_label():
     got = C.parse_sources(SOURCES)
-    assert got["TUNEIN"] == "READY"
-    assert got["LOCAL_INTERNET_RADIO"] == "READY"
+    assert got.statuses[RadioSource.TUNEIN] == "READY"
+    assert got.statuses[RadioSource.LOCAL_INTERNET_RADIO] == "READY"
 
 
 def test_parse_sources_reports_a_missing_source_as_absent():
     """A source the speaker never published must not read as READY."""
-    assert C.parse_sources(SOURCES)["RADIO_BROWSER"] == "ABSENT"
+    assert C.parse_sources(SOURCES).statuses[RadioSource.RADIO_BROWSER] == "ABSENT"
 
 
 def test_parse_sources_keeps_a_non_ready_status():
     payload = SOURCES.replace('source="TUNEIN" status="READY"', 'source="TUNEIN" status="UNAVAILABLE"')
-    assert C.parse_sources(payload)["TUNEIN"] == "UNAVAILABLE"
+    assert C.parse_sources(payload).statuses[RadioSource.TUNEIN] == "UNAVAILABLE"
 
 
 def test_envswitch_comes_last():
@@ -111,7 +120,7 @@ def test_no_injection_by_default():
 
 
 def test_service_urls_tolerate_a_trailing_slash():
-    assert C.service_urls("http://192.0.2.10:8000/")["swUpdateUrl"].count("//") == 1
+    assert C.service_urls("http://192.0.2.10:8000/").get(UrlField.SW_UPDATE).count("//") == 1
 
 
 SERVICE = "http://192.0.2.10:8000"
@@ -237,13 +246,13 @@ def test_a_slot_the_player_wrote_counts_as_correct():
     """
     player = lambda stream: C.orion_location(stream, "Player",  # noqa: E731
                                              service="http://aftertouch.example:8000")
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
-    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=player), wanted) == []
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s")]
+    assert C.slots_to_write(C.parse_presets(_speaker_presets((1, "https://a.example.com/s"), form=player)), wanted) == []
 
 
 def test_a_slot_in_the_legacy_form_counts_as_correct():
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
-    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s"), form=_legacy), wanted) == []
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s")]
+    assert C.slots_to_write(C.parse_presets(_speaker_presets((1, "https://a.example.com/s"), form=_legacy)), wanted) == []
 
 
 def test_relative_and_absolute_slots_side_by_side_both_count_as_correct():
@@ -251,9 +260,9 @@ def test_relative_and_absolute_slots_side_by_side_both_count_as_correct():
     absolute = lambda stream: C.orion_location(stream, "S", service=SERVICE)  # noqa: E731
     raw = _speaker_presets((1, "https://a.example.com/s")).replace("</presets>", "") + \
         _speaker_presets((2, "https://b.example.com/s"), form=absolute).replace("<presets>", "")
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
-              {"buttonNumber": 2, "name": "B", "location": "https://b.example.com/s"}]
-    assert C.slots_to_write(raw, wanted) == []
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s"),
+              PresetEntry(button_number=2, name="B", location="https://b.example.com/s")]
+    assert C.slots_to_write(C.parse_presets(raw), wanted) == []
 
 
 def _registry(host: str = SERVICE, **override: str) -> str:
@@ -266,36 +275,36 @@ def _registry(host: str = SERVICE, **override: str) -> str:
 
 
 def test_a_registry_advertising_the_service_itself_is_ok():
-    assert C.registry_verdict(SERVICE, _registry())["verdict"] == "ok"
+    assert C.registry_verdict(SERVICE, _registry()).verdict == RegistryVerdict.OK
 
 
 def test_a_registry_advertising_another_host_is_foreign():
     """What a cloned container does: settings.json still names the machine it was copied from."""
     verdict = C.registry_verdict("http://192.0.2.20:8000", _registry())
-    assert verdict["verdict"] == "foreign"
-    assert verdict["advertised"]["LOCAL_INTERNET_RADIO"] == f"{SERVICE}{C.ORION_BASE_PATH}"
+    assert verdict.verdict == RegistryVerdict.FOREIGN
+    assert (verdict.advertised or {})["LOCAL_INTERNET_RADIO"] == f"{SERVICE}{C.ORION_BASE_PATH}"
 
 
 def test_one_foreign_entry_is_enough_to_be_foreign():
     body = _registry(TUNEIN="http://192.0.2.99:8000/bmx/tunein")
-    assert C.registry_verdict(SERVICE, body)["verdict"] == "foreign"
+    assert C.registry_verdict(SERVICE, body).verdict == RegistryVerdict.FOREIGN
 
 
 def test_a_trailing_slash_or_default_port_spelling_does_not_read_as_foreign():
-    assert C.registry_verdict(SERVICE + "/", _registry())["verdict"] == "ok"
-    assert C.registry_verdict("http://svc.example", _registry("http://svc.example:80"))["verdict"] == "ok"
+    assert C.registry_verdict(SERVICE + "/", _registry()).verdict == RegistryVerdict.OK
+    assert C.registry_verdict("http://svc.example", _registry("http://svc.example:80")).verdict == RegistryVerdict.OK
 
 
 def test_a_registry_on_the_bose_cloud_is_dns_mode_not_foreign():
     """In AfterTouch's DNS mode the registry names content.api.bose.io on purpose."""
     body = _registry("https://content.api.bose.io")
-    assert C.registry_verdict(SERVICE, body)["verdict"] == "dns-mode"
+    assert C.registry_verdict(SERVICE, body).verdict == RegistryVerdict.DNS_MODE
 
 
 @pytest.mark.parametrize("body", ["", "not json", "[]", '{"bmx_services": []}',
                                   '{"bmx_services": [{"id": {"name": "TUNEIN"}}]}'])
 def test_an_unreadable_registry_says_so_rather_than_ok(body):
-    assert C.registry_verdict(SERVICE, body)["verdict"] == "unreadable"
+    assert C.registry_verdict(SERVICE, body).verdict == RegistryVerdict.UNREADABLE
 
 
 def _raw_presets(*items: tuple[int, str, str]) -> str:
@@ -316,9 +325,9 @@ def test_relativize_plan_rewrites_only_host_bound_radio_slots():
                        (4, "TUNEIN", "/v1/playback/station/s12345"),
                        (5, "TUNEIN", _legacy("https://d.example.com/s")))
     plan = C.relativize_plan(raw)
-    assert [step["button"] for step in plan] == [1, 3]
-    assert plan[0]["old"] == absolute
-    assert plan[0]["new"] == C.orion_location("https://a.example.com/s?x=1&y=2", "A")
+    assert [step.button for step in plan] == [1, 3]
+    assert plan[0].old == absolute
+    assert plan[0].new == C.orion_location("https://a.example.com/s?x=1&y=2", "A")
 
 
 def test_relativize_plan_turns_a_legacy_playback_slot_into_the_relative_orion_form():
@@ -329,11 +338,11 @@ def test_relativize_plan_turns_a_legacy_playback_slot_into_the_relative_orion_fo
     """
     stream = "https://c.example.com/s?x=1&y=2"
     plan = C.relativize_plan(_raw_presets((3, "LOCAL_INTERNET_RADIO", _legacy(stream))))
-    assert [step["button"] for step in plan] == [3]
-    assert plan[0]["new"] == C.orion_location(stream, "Name 3 & Co",
+    assert [step.button for step in plan] == [3]
+    assert plan[0].new == C.orion_location(stream, "Name 3 & Co",
                                               image_url="https://img.example.com/3.png")
-    assert C.stream_url_from_location(str(plan[0]["new"])) == stream
-    assert SERVICE not in str(plan[0]["body"])
+    assert C.stream_url_from_location(plan[0].new) == stream
+    assert SERVICE not in plan[0].body
 
 
 def test_relativize_plan_names_a_legacy_slot_from_its_location_when_the_item_has_none():
@@ -341,7 +350,7 @@ def test_relativize_plan_names_a_legacy_slot_from_its_location_when_the_item_has
     raw = (f'<presets><preset id="2"><ContentItem source="LOCAL_INTERNET_RADIO" type="stationurl" '
            f'location="{location}" /></preset></presets>')
     plan = C.relativize_plan(raw)
-    assert plan[0]["new"] == C.orion_location("https://c.example.com/s", "Radio & Co")
+    assert plan[0].new == C.orion_location("https://c.example.com/s", "Radio & Co")
 
 
 def test_relativize_plan_leaves_an_undecodable_legacy_slot_alone():
@@ -353,7 +362,7 @@ def test_relativize_plan_leaves_an_undecodable_legacy_slot_alone():
 def test_relativize_plan_keeps_everything_but_the_location():
     """Same name, art, source and type: the quick fix upstream offers, done from here."""
     absolute = C.orion_location("https://a.example.com/s?x=1&y=2", "A", service=SERVICE)
-    body = C.relativize_plan(_raw_presets((5, "LOCAL_INTERNET_RADIO", absolute)))[0]["body"]
+    body = C.relativize_plan(_raw_presets((5, "LOCAL_INTERNET_RADIO", absolute)))[0].body
     assert body.startswith('<preset id="5">') and body.endswith("</preset>")
     assert "<itemName>Name 5 &amp; Co</itemName>" in body
     assert "<containerArt>https://img.example.com/5.png</containerArt>" in body
@@ -370,48 +379,48 @@ def test_relativize_plan_is_empty_when_everything_is_already_relative():
 
 def test_a_kept_entry_is_never_written():
     """A Spotify or library preset the skill does not manage must not be judged as missing."""
-    wanted = [{"buttonNumber": 2, "name": "Album", "location": "spotify:album:x", "keep": True,
-               "source": "SPOTIFY", "contentItemType": "tracklisturl"}]
-    assert C.slots_to_write(_speaker_presets(), wanted) == []
+    wanted = [PresetEntry(button_number=2, name="Album", location="spotify:album:x", keep=True,
+                          source="SPOTIFY", content_item_type="tracklisturl")]
+    assert C.slots_to_write(C.parse_presets(_speaker_presets()), wanted) == []
 
 
 def test_slots_to_write_compares_by_stream_not_by_count():
     """A slot pointing at a station the owner replaced must read as needing a write."""
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
-              {"buttonNumber": 2, "name": "B", "location": "https://b.example.com/s"}]
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s"),
+              PresetEntry(button_number=2, name="B", location="https://b.example.com/s")]
     have = _speaker_presets((1, "https://a.example.com/s"), (2, "https://old.example.com/s"))
-    assert C.missing_streams(have, wanted) == ["https://b.example.com/s"]
+    assert C.missing_streams(C.parse_presets(have), wanted) == ["https://b.example.com/s"]
 
 
 def test_slots_to_write_is_empty_when_every_button_is_right():
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
-    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s")), wanted) == []
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s")]
+    assert C.slots_to_write(C.parse_presets(_speaker_presets((1, "https://a.example.com/s"))), wanted) == []
 
 
 def test_the_right_station_on_the_wrong_button_still_needs_writing():
     """Comparing streams alone calls this correct, so the button has to be part of the key."""
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s")]
     have = _speaker_presets((3, "https://a.example.com/s"))
-    assert C.missing_streams(have, wanted) == ["https://a.example.com/s"]
+    assert C.missing_streams(C.parse_presets(have), wanted) == ["https://a.example.com/s"]
 
 
 def test_two_buttons_may_hold_the_same_station():
     """A duplicate is a legitimate template, and each slot is judged on its own."""
-    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
-              {"buttonNumber": 2, "name": "A", "location": "https://a.example.com/s"}]
+    wanted = [PresetEntry(button_number=1, name="A", location="https://a.example.com/s"),
+              PresetEntry(button_number=2, name="A", location="https://a.example.com/s")]
     have = _speaker_presets((1, "https://a.example.com/s"))
-    assert C.missing_streams(have, wanted) == ["https://a.example.com/s"]
+    assert C.missing_streams(C.parse_presets(have), wanted) == ["https://a.example.com/s"]
 
 
 def test_parse_preset_slots_keys_by_button():
-    slots = C.parse_preset_slots(_speaker_presets((1, "https://a.example.com/s"),
-                                                  (4, "https://b.example.com/s")))
+    slots = C.parse_presets(_speaker_presets((1, "https://a.example.com/s"),
+                                             (4, "https://b.example.com/s"))).slots()
     assert sorted(slots) == [1, 4]
 
 
 def test_parse_preset_slots_skips_a_slot_with_no_location():
     """An empty button is absent, never a slot holding the empty string."""
-    assert C.parse_preset_slots('<preset id="2"></preset>') == {}
+    assert C.parse_presets('<preset id="2"></preset>').slots() == {}
 
 
 class _FakeSocket:
@@ -445,7 +454,7 @@ def test_a_reply_that_never_reaches_the_prompt_is_marked_incomplete():
 
 
 def test_parse_presets_reads_every_location():
-    assert len(C.parse_presets('<ContentItem location="a" /><ContentItem location="b" />')) == 2
+    assert len(C.parse_presets('<ContentItem location="a" /><ContentItem location="b" />').locations) == 2
 
 
 def test_http_get_refuses_a_non_http_scheme():
@@ -502,20 +511,20 @@ HEADER_2015 = "Mon, 06 Jul 2015 20:36:50 GMT"
 
 def test_a_clock_within_the_tolerance_reads_ok_and_reports_what_the_box_said():
     state = C.clock_state(HEADER_NOW, now=NOW)
-    assert state["verdict"] == "ok"
-    assert state["reading"] == "2026-09-20 03:20:33"
+    assert state.verdict == ClockVerdict.OK
+    assert state.reading == "2026-09-20 03:20:33"
 
 
 def test_a_local_time_offset_is_not_mistaken_for_a_wrong_clock():
     """The header labels local time as GMT, so a correct clock is hours out by construction."""
-    assert C.clock_state(HEADER_NOW, now=NOW - 7200)["verdict"] == "ok"
-    assert C.clock_state(HEADER_NOW, now=NOW + 7200)["verdict"] == "ok"
+    assert C.clock_state(HEADER_NOW, now=NOW - 7200).verdict == ClockVerdict.OK
+    assert C.clock_state(HEADER_NOW, now=NOW + 7200).verdict == ClockVerdict.OK
 
 
 def test_a_clock_left_in_2015_reads_wrong():
     state = C.clock_state(HEADER_2015, now=NOW)
-    assert state["verdict"] == "wrong"
-    assert state["reading"] == "2015-07-06 20:36:50"
+    assert state.verdict == ClockVerdict.WRONG
+    assert state.reading == "2015-07-06 20:36:50"
 
 
 def test_the_tolerance_clears_every_utc_offset_and_still_catches_the_real_fault():
@@ -526,8 +535,8 @@ def test_the_tolerance_clears_every_utc_offset_and_still_catches_the_real_fault(
 def test_no_header_or_an_unreadable_one_reads_unknown():
     for header in (None, "", "whenever it feels like"):
         state = C.clock_state(header, now=NOW)
-        assert state["verdict"] == "unknown"
-        assert state["reading"] is None
+        assert state.verdict == ClockVerdict.UNKNOWN
+        assert state.reading is None
 
 
 @pytest.mark.parametrize("service", ["http://127.0.0.1:8000", "http://localhost:8000",
@@ -538,5 +547,5 @@ def test_a_loopback_service_address_cannot_judge_the_registry(service):
     Comparing against it called a correct registry foreign; not knowing is not a fault.
     """
     verdict = C.registry_verdict(service, _registry())
-    assert verdict["verdict"] == "unjudged"
-    assert "speakers" in str(verdict["reason"])
+    assert verdict.verdict == RegistryVerdict.UNJUDGED
+    assert "speakers" in verdict.reason

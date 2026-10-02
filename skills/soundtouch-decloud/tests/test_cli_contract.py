@@ -18,6 +18,7 @@ import soundtouch_find as F
 import soundtouch_onboard as O
 import soundtouch_presets as P
 import soundtouch_service as S
+from soundtouch_core import TelnetReply
 
 SCRIPTS = {"soundtouch_find.py": F, "soundtouch_service.py": S,
            "soundtouch_presets.py": P, "soundtouch_onboard.py": O}
@@ -188,9 +189,9 @@ def test_enable_ssh_on_an_unpaired_speaker_refuses_with_an_envelope(
     assert "account" in str(body["data"]).lower()
 
 
-def _accepted(_ip: str, commands: list[str]) -> list[dict[str, object]]:
+def _accepted(_ip: str, commands: list[str]) -> list[TelnetReply]:
     """Every telnet command answered and reached its prompt, which is the interesting case."""
-    return [{"cmd": c, "reply": "Setting Bose Server URLs\n->", "complete": True} for c in commands]
+    return [TelnetReply(cmd=c, reply="Setting Bose Server URLs\n->", complete=True) for c in commands]
 
 
 def _stub_speaker(monkeypatch: pytest.MonkeyPatch, answers: list[bool]) -> None:

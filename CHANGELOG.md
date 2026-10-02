@@ -7,6 +7,36 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.1] 2026-10-02
+
+### Changed
+
+- **The scripts pass typed records, not dicts.** Every reply from a speaker, the service, a
+  template or a manifest is parsed once into a frozen dataclass, and the closed sets of words the
+  scripts decide on (verdicts, stream kinds, subcommands, URL fields, radio sources, platform
+  families) are StrEnums. Plain dicts appear only where a script prints its JSON envelope. Still
+  standard library only. The printed JSON and the exit codes are byte-identical on every
+  well-formed input, checked against 1.10.0 over 85 recorded runs of every non-interactive
+  subcommand.
+
+### Fixed
+
+Malformed input that used to crash or be misread now gets an ordinary answer:
+
+- **A template whose top level is not an object, or whose entry is not one** (`[1, 2]`, `[5]`,
+  `["abc"]`) ended `check`, `restore` and `validate` with a Python traceback and exit 1. They now
+  print the usual error envelope and exit 2: "template has no presets", "preset is missing
+  'buttonNumber': 5", or for `validate` "preset is not an object: abc".
+- **`health` read a service device list that is not a list.** A JSON object was counted as one
+  device and passed; `null` crashed with a traceback. Both now take the existing "the service
+  answered but not with JSON" error, exit 2.
+- **`find` no longer probes a device address that is not a string.** A number in the service's
+  `ip_address` was turned into a target such as `9`; a non-string name, id or address now reads
+  as `null`.
+- **`restore` reports a numeric station name as text**: `"wrote": ["7"]`, not `[7]`.
+- **`check_repo.py` reports a manifest that is not a JSON object** through its normal failure
+  messages instead of crashing.
+
 ## [1.10.0] 2026-10-01
 
 ### Changed

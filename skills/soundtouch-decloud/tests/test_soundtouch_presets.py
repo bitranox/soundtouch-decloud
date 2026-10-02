@@ -111,21 +111,21 @@ def test_preset_xml_carries_the_source_and_type():
     assert 'source="LOCAL_INTERNET_RADIO"' in xml and 'type="stationurl"' in xml
 
 
-def test_radio_ready_is_false_when_the_speaker_cannot_be_reached(monkeypatch):
+def test_radio_source_mounted_is_false_when_the_speaker_cannot_be_reached(monkeypatch):
     """Unreachable must read as not-ready, so a restore never writes into the wipe window."""
     def boom(_url, timeout=8.0):
         raise P.SpeakerError("unreachable")
     monkeypatch.setattr(P, "http_get", boom)
-    assert P.radio_ready("192.0.2.31") is False
+    assert P.radio_source_mounted("192.0.2.31") is False
 
 
-def test_radio_ready_is_true_only_when_the_radio_source_is_mounted(monkeypatch):
+def test_radio_source_mounted_is_true_only_when_the_radio_source_is_mounted(monkeypatch):
     monkeypatch.setattr(P, "http_get", lambda *a, **k:
                         '<sourceItem source="LOCAL_INTERNET_RADIO" status="READY" />')
-    assert P.radio_ready("192.0.2.31") is True
+    assert P.radio_source_mounted("192.0.2.31") is True
     monkeypatch.setattr(P, "http_get", lambda *a, **k:
                         '<sourceItem source="LOCAL_INTERNET_RADIO" status="UNAVAILABLE" />')
-    assert P.radio_ready("192.0.2.31") is False
+    assert P.radio_source_mounted("192.0.2.31") is False
 
 
 ABSOLUTE = C.orion_location("https://a.example.com/s?x=1&y=2", "A", service="http://192.0.2.10:8000")
@@ -270,3 +270,54 @@ def test_restore_absolute_writes_the_service_host(monkeypatch, tmp_path, capsys)
                  "--service", "http://192.0.2.10:8000", "--absolute", "--confirm"])
     assert rc == 0, capsys.readouterr().out
     assert speaker.location.startswith("http://192.0.2.10:8000/core02/")
+
+
+def _restore(monkeypatch, tmp_path, capsys, speaker: FakeSpeaker, *extra: str) -> tuple[int, dict]:
+    _fake(monkeypatch, speaker)
+    template = dict(GOOD, presets=[dict(GOOD["presets"][0], buttonNumber=3)])
+    rc = P.main(["restore", "--ip", "192.0.2.31", "--template", _write(tmp_path, template), *extra])
+    return rc, json.loads(capsys.readouterr().out)["data"]
+
+
+def test_a_restore_dry_run_names_the_host_bound_slots_it_read(monkeypatch, tmp_path, capsys):
+    rc, data = _restore(monkeypatch, tmp_path, capsys,
+                        FakeSpeaker(C.orion_location("https://old.example.com/gone", "A",
+                                                     service="http://192.0.2.10:8000")))
+    assert rc == 1 and data["would_write"] == 1
+    assert data["host_bound"] == [3]
+
+
+def test_a_restore_reports_host_bound_from_what_the_speaker_holds_afterwards(monkeypatch, tmp_path,
+                                                                             capsys):
+    rc, data = _restore(monkeypatch, tmp_path, capsys, FakeSpeaker("https://old.example.com/gone"),
+                        "--confirm")
+    assert rc == 0, data
+    assert data["host_bound"] == [] and "warning" not in data
+    rc, data = _restore(monkeypatch, tmp_path, capsys, FakeSpeaker("https://old.example.com/gone"),
+                        "--service", "http://192.0.2.10:8000", "--absolute", "--confirm")
+    assert rc == 0, data
+    assert data["host_bound"] == [3]
+
+
+class VanishingSpeaker(FakeSpeaker):
+    """Answers until it has been written to, then drops off the network."""
+
+    def get(self, url: str, timeout: float = 8.0) -> str:
+        if self.stored and url.endswith("/presets"):
+            raise C.SpeakerError(f"{url}: timed out")
+        return super().get(url, timeout)
+
+
+def test_a_restore_whose_speaker_vanishes_after_writing_answers_with_an_envelope(
+        monkeypatch, tmp_path, capsys):
+    rc, data = _restore(monkeypatch, tmp_path, capsys,
+                        VanishingSpeaker("https://old.example.com/gone"), "--confirm")
+    assert rc == 2 and data["wrote"] and "timed out" in data["error"]
+
+
+def test_a_relativize_whose_speaker_vanishes_after_writing_answers_with_an_envelope(
+        monkeypatch, tmp_path, capsys):
+    _fake(monkeypatch, VanishingSpeaker(ABSOLUTE))
+    rc = P.main(["relativize", "--ip", "192.0.2.31", "--outdir", str(tmp_path), "--confirm"])
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert rc == 2 and data["rewrote"] == [3] and "timed out" in data["error"]

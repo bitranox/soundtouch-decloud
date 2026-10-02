@@ -2,6 +2,7 @@
 """Check Docker, render the service compose file, and check the service is alive.
 
     uv run scripts/soundtouch_service.py check-docker
+    uv run scripts/soundtouch_service.py install-hint ubuntu
     uv run scripts/soundtouch_service.py render --host 192.0.2.10 --out docker-compose.yml
     uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
 
@@ -47,8 +48,7 @@ _NAS = ("Install the Container Manager (Synology) or Container Station (QNAP) pa
         "vendor's package centre, then run the check again.")
 
 # Keyed by what an owner actually answers when asked what the machine runs, not by packaging
-# family: "ubuntu" and "raspberry pi os" are the two commonest answers, and both used to fall
-# through to "which system is this?" while the guide listed them as supported.
+# family: "ubuntu" and "raspberry pi os" are the two commonest answers, so each is a key of its own.
 INSTALL_HINTS = {
     "windows": _DESKTOP,
     "macos": _DESKTOP,

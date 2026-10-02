@@ -7,6 +7,40 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.3] 2026-10-02
+
+### Changed
+
+- **`soundtouch_find.py` says `unreadable` when its `/info`, `/sources` or `/presets` read failed,
+  not only `/info`.** A speaker whose
+  `/sources` or `/presets` read failed was reported `ready` or `needs-presets` from a question it
+  never answered. The verdict word `info-unreadable` is now `unreadable`, and the envelope's
+  `info_error`, `sources_error` or `presets_error` says which read failed.
+- **`soundtouch_onboard.py` exits 2 when the speaker could not be reached or refused a request**,
+  or `--service` is missing, matching `soundtouch_presets.py` and `soundtouch_service.py`: 1 is a
+  definite no, 2 a question left unanswered.
+- **`soundtouch_presets.py check` no longer accepts `--service`**, which it ignored; only `restore
+  --absolute` uses it.
+- **`restore` reports `host_bound` in its dry run and after a write too**, not only when nothing
+  needed writing; after a write it is read from what the speaker holds then. Its warning names any
+  host, not only the service's.
+- `soundtouch_presets.radio_ready` is renamed `radio_source_mounted`, since it checks only that
+  `LOCAL_INTERNET_RADIO` is mounted.
+- **`harvest` without `--out` puts the template inside the envelope**, so stdout is one JSON
+  document.
+- The skill's documentation was checked against the scripts and corrected throughout, and the
+  advice on how long to wait before judging a restarted speaker says 90 seconds in every file.
+
+### Fixed
+
+- **A Bose cloud preset whose blob uses the base64url alphabet** (`-` or `_`) decoded to nothing,
+  and so did a standard blob whose `+` arrived unescaped. Both now yield their stream.
+- **`soundtouch_preflight.py` starts on Python 3.9 and 3.10** and reports the Python as too old,
+  where it stopped with an ImportError. `--system ubuntu` and the other answers the Docker hints
+  know now get their family's compose and Python instructions rather than the generic one.
+- **`harvest` of an unreadable backup, and a speaker that drops off right after `restore` or
+  `relativize` wrote to it,** answer with an error envelope and exit 2 instead of a traceback.
+
 ## [1.10.2] 2026-10-02
 
 ### Fixed
@@ -20,9 +54,9 @@ This repo is the skill's only home, so this file is the only version history it 
 - **A failed `/info` read is no longer reported as a missing account.** It has its own verdict,
   `info-unreadable`, with advice to wait out a restart, where it used to say `needs-account`
   without the account ever having been read.
-- **A refused key press or volume write ends with the JSON envelope.** `soundtouch_onboard.py
-  play` and `reboot` let an HTTP error from the speaker's `/key` or `/volume` POST escape as a
-  Python traceback. It is now an error envelope and exit 1, the same as a failed read.
+- **A refused key press ends with the JSON envelope.** `soundtouch_onboard.py play` let an HTTP
+  error from the speaker's `/key` POST (the wake press or the preset press) escape as a Python
+  traceback. It is now an error envelope and exit 1, the same as a failed read.
 
 ## [1.10.1] 2026-10-02
 

@@ -83,7 +83,7 @@ def test_the_not_answering_advice_tells_the_owner_to_wake_it():
 
 
 def test_the_sources_advice_gives_a_real_wait():
-    assert "80" in F.describe_state(F.SpeakerVerdict.SOURCES_NOT_READY)
+    assert "90" in F.describe_state(F.SpeakerVerdict.SOURCES_NOT_READY)
 
 
 def test_a_clock_left_in_2015_is_named_rather_than_called_ready():
@@ -193,8 +193,25 @@ def test_an_unreadable_info_is_not_blamed_on_the_account():
     """The account was never read, so 'no account attached' would be a claim nothing supports."""
     state = F.SpeakerState(ip="192.0.2.31", ports=OPEN_PORTS, info_error="timed out",
                            sources=_sources(), preset_count=6)
-    assert F.classify(state) == F.SpeakerVerdict.INFO_UNREADABLE
+    assert F.classify(state) == F.SpeakerVerdict.UNREADABLE
     assert json.loads(json.dumps(state.to_json()))["info_error"] == "timed out"
+
+
+def _healthy_but(*, sources_error: str | None = None,
+                 presets_error: str | None = None) -> F.SpeakerState:
+    """A healthy answering speaker whose /sources or /presets read failed."""
+    info = F.DeviceInfo(name="Room1", device_id="AABBCC0000A1", account="1234567")
+    return F.SpeakerState(ip="192.0.2.31", ports=OPEN_PORTS, info=info,
+                          sources=None if sources_error else _sources(), sources_error=sources_error,
+                          preset_count=None if presets_error else 6, presets_error=presets_error)
+
+
+def test_unreadable_presets_are_not_reported_as_no_presets():
+    assert F.classify(_healthy_but(presets_error="timed out")) == F.SpeakerVerdict.UNREADABLE
+
+
+def test_unreadable_sources_cannot_read_as_ready():
+    assert F.classify(_healthy_but(sources_error="timed out")) == F.SpeakerVerdict.UNREADABLE
 
 
 def test_a_migration_fault_still_outranks_an_unreadable_info():

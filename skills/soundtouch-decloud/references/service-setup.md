@@ -39,6 +39,9 @@ Check first, and only offer to install if it is missing:
 docker --version && docker compose version
 ```
 
+Or run `uv run scripts/soundtouch_service.py check-docker`, which answers the same in JSON, and
+`install-hint <system>` for the instruction below.
+
 If that fails, ask which system the machine runs and walk them through it:
 
 | System                          | What to tell them                                                                                       |
@@ -105,8 +108,9 @@ uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
 ```
 
 It exits 1 and names `settings.json` when the registry advertises another address. Give it the
-address the SPEAKERS use: run with `127.0.0.1` or `localhost` it reports the registry as `unjudged`,
-because a loopback address says nothing about which host the speakers should be sent to. After
+address the SPEAKERS use: run with `127.0.0.1` or `localhost` it reports the registry as `unjudged`
+and still exits 0, because a loopback address says nothing about which host the speakers should be
+sent to. After
 correcting it, reboot every speaker: a speaker reads the registry when it starts, so until then it
 keeps using the old address even though `health` already says ok.
 
@@ -148,10 +152,13 @@ switched on at all. `render` warns when it is left alone; `--mgmt-password` sets
 **Pinning a version: the image tag carries no `v`.** Releases and git tags are `v0.122.1`; the image
 on ghcr is `0.122.1`. A pin to `v0.122.1` cannot be resolved, and because the running container is
 unaffected, that only surfaces at the next restart. Check a pin before relying on it:
-`docker pull ghcr.io/gesellix/bose-soundtouch:<version>`.
+`docker pull ghcr.io/gesellix/bose-soundtouch:<version>`. Let `render` write the pin:
+`--version 0.122.1`, never `--version v0.122.1`.
 
 Put the file in a directory of the owner's choosing. Any path works; `/opt/soundtouch` is only a
-convention. Create it first, then render the file into it:
+convention. The data directory is a separate choice: the file mounts `/opt/soundtouch/data` unless
+`render` is given `--data-dir <path>`, wherever the file itself lives. Create it first, then render
+the file into it:
 
 ```bash
 mkdir -p /opt/soundtouch/data && cd /opt/soundtouch
@@ -176,8 +183,9 @@ including one that pushes the service's stored presets back onto a speaker witho
 The `/api/setup/*` calls in this skill are open by default, whatever `MGMT_PASSWORD` is set to.
 They sit behind the Management API login only when the admin area gate is switched on: Settings
 (`admin_area_auth` set to `enabled`). The service refuses to switch it on while the credentials are
-still the published default (`admin` / `change_me!`), so change `MGMT_USERNAME` and
-`MGMT_PASSWORD` first. Once it is on, every call here needs `-u <user>:<password>`, and without it
+still the published default (`admin` / `change_me!`), so change `MGMT_PASSWORD` (`render
+--mgmt-password`) and `MGMT_USERNAME` (`render` has no flag for it; edit the line in the rendered
+file) first. Once it is on, every call here needs `-u <user>:<password>`, and without it
 answers 401 without explaining why.
 
 ## Phase 5: finding the speakers

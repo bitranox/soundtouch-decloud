@@ -28,7 +28,19 @@ Nothing reports this. The speaker simply comes back on the old configuration.
 `statsServerUrl` can ONLY be set by `sys configuration`, so a migration that skips those commands
 never sets them at all.
 
-The safe way is to let the service do it:
+The skill's own command writes them in that order and reads the result back from the speaker:
+
+```bash
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> --service http://<service-host>:8000 migrate --confirm
+```
+
+Without `--confirm` it only prints the commands it would send (`would_run`). With it, the envelope
+carries the `getpdo` read-back (`urls`, `cloud_leftovers`, `still_injected`, `missing`) plus every
+telnet reply, and `ok` is true, exit 0, only when all four URLs are present, none names the Bose
+cloud, none carries a `;`, and every reply reached the prompt. That read-back is the LIVE
+configuration; run `reboot --confirm` next.
+
+The service can do the same:
 
 ```bash
 curl -X POST "http://<service-host>:8000/api/setup/migrate/<deviceId>?method=telnet&target_url=http://<service-host>:8000"
@@ -60,7 +72,10 @@ margeServerUrl {
 ```
 
 Any `bose.com`, `bose.io` or `bosecm.com` still present means the migration is incomplete. So does
-any `;` in a value, which means an injection was never cleaned up.
+any `;` in a value, which means an injection was never cleaned up, and so does a field that is not
+listed at all. `uv run scripts/soundtouch_onboard.py --ip <speaker-ip> state` does this read for
+you: it reports `cloud_leftovers`, `still_injected` and `missing` alongside the radio `sources`, and
+exits 0 only when all three are empty.
 
 ## Reboot, then wait
 
@@ -79,6 +94,15 @@ restarted.
 Do not trust the reply that it is rebooting. Confirm port 8090 actually drops, then comes back.
 A wait that only checks for "back up" reports success instantly when the reboot never happened.
 
+`reboot --confirm` does that check itself: it fails if port 8090 never drops within 60 seconds or
+never comes back within 180. It then polls `/sources` for up to `--sources-wait` seconds (default
+240) until internet radio is ready: `LOCAL_INTERNET_RADIO` READY and every source the speaker lists
+READY. A source the speaker never lists reads `ABSENT` and does not count against it, for example
+`RADIO_BROWSER` on the Wireless Link Adapter (firmware 20). A reboot can also drop the volume, so
+the command reads it beforehand and puts it back; the envelope carries `down_after_s`,
+`up_after_s`, `sources`, `volume_before` and `volume_after`, and `ok` is false (exit 1) when radio
+is not ready or the volume did not return.
+
 Timings to tell the owner:
 
 | After a reboot | What happens                     |
@@ -88,19 +112,27 @@ Timings to tell the owner:
 | about 73 s     | account sync completes           |
 | about 80 s     | radio sources are ready          |
 
-Do not declare failure before roughly 80 seconds.
+Readiness varies by speaker, so do not declare failure before roughly 90 seconds.
 
 ## If the sources never mount
 
-All four URLs correct and still no radio means the speaker has no account bound. Without one it
-never contacts the account URL at all, so this is stronger than "the sources are missing".
+All four URLs correct and the radio sources never reaching READY means the speaker has no
+account bound. Without one it never contacts the account URL at all, so this is stronger than "the
+sources are missing". (If the sources read READY and radio still fails, check the registry
+instead: `soundtouch_find.py` reports that as `registry-foreign`.)
 
 ```bash
-curl -s http://<speaker-ip>:8090/info | grep -o '<margeAccountUUID>[^<]*'
+uv run scripts/soundtouch_find.py --ip <speaker-ip>
 ```
 
-Empty is the cause. A speaker that was registered to the Bose cloud brings its account with it; one
-that was factory reset does not. Ask the service which accounts it already knows, then bind:
+A `needs-account` verdict means `/info` was read and its `margeAccountUUID` is empty. That is the
+cause, with one exception: firmware that reports the field empty while paired (the Wireless Link
+Adapter on 20.0.6, see `access-and-rooting.md`); there, check the service's own records for the
+speaker's account requests before binding anything. `unreadable` means a read of `/info`,
+`/sources` or `/presets` failed (the envelope's `*_error` field says which), so the account may be
+unknown rather than missing: give the speaker about 90 seconds after a restart and look
+again. A speaker that was registered to the Bose cloud brings its account with it; one that was
+factory reset does not. Ask the service which accounts it already knows, then bind:
 
 `<deviceId>` is the speaker's Ethernet MAC in upper case with no separators. Read it from the
 service's own device list, or from the speaker, rather than typing it out:

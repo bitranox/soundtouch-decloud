@@ -309,3 +309,41 @@ def test_validate_reports_a_hole_without_calling_it_dead(tmp_path, capsys):
     assert P.main(["validate", "--template", str(path)]) == 1
     result = json.loads(capsys.readouterr().out)["data"]["results"][0]
     assert (result["verdict"], result["name"]) == ("missing", "Needs Research")
+
+
+@pytest.mark.parametrize("stream", ["https://radio.example.com/live?a=1&b=>?",
+                                    "https://a.example/~~~"])
+def test_a_base64url_blob_decodes_although_it_uses_the_url_alphabet(stream):
+    """The cloud wrote its blob as base64url; the standard decoder drops '-' and '_' unread and
+    returns a corrupt string rather than refusing."""
+    blob = base64.urlsafe_b64encode(
+        json.dumps({"name": "X", "imageUrl": "", "streamUrl": stream}).encode()).decode()
+    assert "-" in blob or "_" in blob, "fixture must exercise the url alphabet"
+    location = ("https://content.api.bose.io/core02/svc-bmx-adapter-orion/prod/orion/station?data="
+                + urllib.parse.quote(blob.rstrip("="), safe=""))
+    assert C.decode_cloud_location(location) == stream
+
+
+def test_a_standard_blob_with_an_unescaped_plus_decodes():
+    """A '+' left raw in the query string arrives as a space after query parsing."""
+    stream = "https://a.example/live?>>>"
+    blob = base64.b64encode(
+        json.dumps({"name": "X", "imageUrl": "", "streamUrl": stream}).encode()).decode()
+    assert "+" in blob, "fixture must carry a '+'"
+    location = "https://content.api.bose.io/core02/svc-bmx-adapter-orion/prod/orion/station?data=" + blob
+    assert C.decode_cloud_location(location) == stream
+
+
+def test_harvest_of_an_unreadable_backup_answers_with_an_envelope(tmp_path, capsys):
+    rc = P.main(["harvest", "--backup", str(tmp_path / "absent.xml")])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 2 and out["ok"] is False and "absent.xml" in out["data"]["error"]
+
+
+def test_harvest_without_out_prints_one_json_document(tmp_path, capsys):
+    backup = tmp_path / "presets.xml"
+    backup.write_text(PREMIGRATION, encoding="utf-8")
+    P.main(["harvest", "--backup", str(backup)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["command"] == "harvest"
+    assert [p["buttonNumber"] for p in out["data"]["template"]["presets"]] == [1, 2, 3, 4]

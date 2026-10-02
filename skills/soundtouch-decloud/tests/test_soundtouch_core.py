@@ -210,7 +210,7 @@ def test_any_host_absolute_form_relativizes_to_the_upstream_relative_form(args, 
 
 
 def _legacy(stream: str) -> str:
-    """The /custom/v1/playback form this skill wrote before 1.8.0, still on speakers today."""
+    """The legacy host-bound /custom/v1/playback form, which speakers and the player still hold."""
     encoded = base64.urlsafe_b64encode(stream.encode()).decode()
     return f"{SERVICE}{C.PLAYBACK_PATH}{encoded}?name=S"
 

@@ -2,11 +2,10 @@
 
 ## Back up first, always
 
-Do this BEFORE migrating. A migration can empty the account's stored presets - measured here, six
-presets lost on one speaker and rebuilt from the backup - and if that happens the only copy left is
-this backup. Upstream added a confirmation guard to the destructive Sync path in v0.129.0, so a
-current service warns before an overwrite that shrinks a preset set. Back up anyway: the guard
-covers Sync, not every route, and it is one command.
+Do this BEFORE migrating. A migration can empty the account's stored presets (it has emptied a
+whole speaker's list, recovered only from the backup), and if that happens the only copy left is
+this backup. AfterTouch v0.129.0 and later warns before a Sync overwrite that shrinks a preset
+set. Back up anyway: that guard covers Sync, not every route, and the backup is one command.
 
 ```bash
 uv run scripts/soundtouch_presets.py backup --ip <speaker-ip> --outdir ./backup
@@ -104,8 +103,8 @@ uv run scripts/soundtouch_presets.py validate --template <speaker>.json
 ```
 
 It fetches each `location`, follows a playlist exactly one level, and reports per button: `audio`
-(playable), `playlist`, `hls`, `not-audio`, `dead`, or `missing` for a hole `harvest` left and
-nobody has researched yet. `missing` and `dead` are kept apart on purpose: `dead` means the station
+(playable), `playlist`, `hls`, `not-audio`, `dead`, `missing` for a hole `harvest` left and
+nobody has researched yet, or `kept` for a non-radio preset it does not fetch. `missing` and `dead` are kept apart on purpose: `dead` means the station
 moved or ended and needs a replacement stream, `missing` means nobody has looked for one. Exit 0
 when every button is playable, 1 when any is not, 2 when the template cannot be read.
 
@@ -151,24 +150,29 @@ Right:
              sourceAccount="" isPresetable="true"><itemName>Example Radio</itemName></ContentItem>
 ```
 
-Two older forms play too, and every script here still reads them:
+Two other forms play too, and every script here reads them:
 
 - The ABSOLUTE Orion form, `http://<service-host>:8000/core02/svc-bmx-adapter-orion/prod/orion/station?data=<blob>`:
-  the same station with the host written in. AfterTouch before v0.138.0 and this skill before
-  1.9.0 wrote it. It keeps working only while the service stays at that address, so convert it
-  with `relativize` (below) or the quick fix on AfterTouch's Health page. `restore --absolute
-  --service <url>` still writes it, for a speaker whose firmware cannot resolve the relative form:
-  that is verified upstream on firmware 27.0.6 only, so try one button on older firmware first.
-- `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`, written by this skill
-  before 1.8.0, by some of the service's own playback paths, and by the player's older catalog
-  entries: AfterTouch v0.138.1 lists some stations twice with no hint of the form, and the older
-  entry writes this one. It names the host too, so `relativize` converts it as well, rebuilding
-  the relative form from the stream its base64 carries.
+  the same station with the host written in. AfterTouch before v0.138.0 writes it, and so does
+  `restore --absolute --service <url>`, for a speaker whose firmware cannot resolve the relative
+  form: that form is verified upstream on firmware 27.0.6 only, so try one button on older
+  firmware first. It keeps working only while the service stays at that address, so convert it
+  with `relativize` (below) or the quick fix on AfterTouch's Health page.
+- The legacy playback form, `http://<service-host>:8000/custom/v1/playback/<base64url>?name=<name>`,
+  written by some of the service's own playback paths and by the player's older catalog entries:
+  AfterTouch v0.138.1 lists some stations twice with no hint of the form, and the older entry
+  writes this one. It names the host too, so `relativize` converts it as well. It rebuilds the
+  relative form from the stream its base64 carries, takes the name from the slot's `itemName` (or
+  from `?name=` when the slot has none) and the picture from its `containerArt`. A location whose
+  base64 does not decode is left alone, since rewriting it would store a station with no stream.
 
 `check` reads all three, and a bare stream URL, by the stream they stand for rather than by the
 string, so a button stored in either Orion form counts as correct. `check` and `restore` also list
-the buttons whose location names the service's address under `host_bound`, with a `warning`; that
-does not change the exit code, because the station on those buttons is right.
+every radio button whose location names a host under `host_bound`, with a `warning`: an absolute
+Orion location, whatever host it names (a dead Bose one included), or a legacy playback location
+whose base64 decodes.
+That does not change the exit code, because the station on those buttons can be right; the host
+is what stops it playing once that address moves or is gone.
 
 Wrong, and accepted at write time:
 
@@ -220,8 +224,9 @@ reproduced it. If one speaker in a multi-speaker home keeps losing presets, try 
 anything else below.
 
 The skill's own safety net is a snapshot kept off the speaker AND off the service, written back by
-hand after the source has mounted when nothing better applies. One JSON file per speaker, named by
-device id:
+hand after the source has mounted when nothing better applies; `restore` refuses on its own while
+the radio source is not READY yet. One JSON file per speaker, named by device id; pass `--name`
+and `--device-id` to `harvest` so the template records them:
 
 ```json
 {
@@ -240,7 +245,8 @@ device id:
 ```
 
 The `location` here is the PLAIN stream URL. The script builds the relative Orion wrapping when it
-writes, so neither these files nor the presets name the service's address. An entry with
+writes, so neither these files nor the presets name the service's address (unless `restore
+--absolute` is used). An entry with
 `"keep": true` is a non-radio preset `harvest` carried over; it is left alone.
 
 ```bash
@@ -253,9 +259,10 @@ uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> --template <speak
 
 ### Converting host-bound presets to the relative form
 
-Presets saved before AfterTouch v0.138.0 (or by this skill before 1.9.0) name the service's
-address, and so does any button holding the legacy `/custom/v1/playback` form. `relativize` stores each such button again in the relative form - same station, name,
-picture and button - after backing the speaker's presets up. Without `--confirm` it only lists the
+Presets saved before AfterTouch v0.138.0, or written with `restore --absolute`, name the
+service's address, and so does any button holding the legacy `/custom/v1/playback` form.
+`relativize` stores each such button again in the relative form - same station, name, picture and
+button - after backing the speaker's presets up, and refuses while the radio source is not READY. Without `--confirm` it only lists the
 buttons it would change:
 
 ```bash
@@ -304,10 +311,9 @@ Zero means the wipe is not happening on this installation and there is nothing t
 non-zero count tells you how OFTEN, which is the number that decides what to do next, and the
 envelopes themselves say which speaker and which buttons.
 
-Measured at one site, six speakers, over 18.7 days: a restore loop running every two minutes made
-11692 runs and wrote presets exactly ONCE, in its first hour, cleaning up a loss that predated it.
-In none of those 11692 runs did a speaker answer while short of its presets. On that evidence the
-loop was retired and nothing that writes replaced it.
+Measured at one site with six speakers: a restore loop running every two minutes for weeks wrote
+presets exactly ONCE, in its first hour, cleaning up a loss that predated it. In none of its other
+runs did a speaker answer while short of its presets.
 
 That is one site on one service build, and it is offered as a reason to measure yours, not as a
 result to copy. Two things to try first if the wipe IS happening on yours: give the speaker its own
@@ -342,7 +348,8 @@ to reach for them:
    way the other entry stays in the catalog, so the choice can be undone.
 3. **"Refresh sources on speaker"** in the player, or the admin Health tab's QuickFix at
    `http://<service-host>:8000/admin`, to push the stored presets now instead of at the next fetch.
-4. **`setup sync --confirm`** (admin "Sync Data") imports a speaker's whole list into the service.
+4. **`soundtouch-cli setup sync --confirm`** (AfterTouch's own CLI; admin "Sync Data") imports a
+   speaker's whole list into the service.
    It refuses an import that would shrink what is stored unless confirmed, and it is never shared
    to the other speakers.
 5. **This skill's snapshot and `restore`**, by hand, when all of the above disagree with what the
@@ -360,15 +367,15 @@ answers a different question, and answers it in a way that destroys the evidence
 Build the alarm on `check`, which never writes, and act on its EXIT CODE. The two failures are not
 one failure and must not share a threshold:
 
-| Exit | What it found                                         | How patient to be                                                     |
-|------|-------------------------------------------------------|-----------------------------------------------------------------------|
-| 0    | every speaker answered, every button holds its stream | nothing to do                                                         |
-| 1    | a speaker ANSWERED and is short of its presets        | this is the real thing. Report the first one                          |
-| 2    | a speaker could not be read at all                    | usually asleep or on flaky WiFi. Require a long streak before mailing |
+| Exit | What it found                                                         | How patient to be                                                                                                                                                       |
+|------|-----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0    | every speaker answered, every button holds its stream                 | nothing to do                                                                                                                                                           |
+| 1    | a speaker ANSWERED and is short of its presets                        | this is the real thing. Report the first one                                                                                                                            |
+| 2    | a speaker could not be read at all, or the template could not be read | a speaker is usually asleep or on flaky WiFi, so require a long streak before mailing; the envelope's `error` says which, and a template error does not heal by waiting |
 
 Collapsing 1 and 2 into one "it failed" branch is the mistake that makes the alarm useless, and it
 is the shape a shell `if` falls into by default. Measured at the same site: one WiFi speaker that
-sleeps produced 1303 unreadable readings out of 11692 while never once being short of presets. An
+sleeps was unreadable over and over while never once being short of presets. An
 alarm that mailed on any non-zero exit would have been almost entirely that speaker napping, and
 the owner would have learned to ignore it before a real loss ever arrived.
 

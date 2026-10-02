@@ -6,14 +6,14 @@
     uv run scripts/soundtouch_presets.py backup  --ip 192.0.2.31 --outdir ./backup
     uv run scripts/soundtouch_presets.py check   --ip 192.0.2.31 --template speaker.json
     uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json --confirm
-    uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json \
-                                                 --service http://192.0.2.10:8000 --absolute --confirm
+    uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json --service http://192.0.2.10:8000 --absolute --confirm
     uv run scripts/soundtouch_presets.py relativize --ip 192.0.2.31 --outdir ./backup --confirm
 
 Presets are written in the relative Orion form, which follows the service to a new address;
 --absolute writes the host in, for firmware that cannot resolve a relative location. `relativize`
 stores every host-bound preset on a speaker (absolute Orion, or the legacy /custom/v1/playback form)
-again in the relative form; `check` and `restore` name those buttons under "host_bound".
+again in the relative form; `check` and `restore` name those buttons under "host_bound", as a
+warning that does not change the exit code.
 Nothing is written without --confirm.
 Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
 """
@@ -56,10 +56,10 @@ KEPT_NOTE = "not radio; left as it is"
 SHARING_NOTE = ("AfterTouch shares a stored preset with the other speakers of the same account "
                 "(v0.137.0 and later), so this write can reach them too.")
 NOT_MOUNTED = ("the radio source is not mounted yet, so a write would be silently undone. Wait "
-               "about 80 seconds after a restart.")
+               "about 90 seconds after a restart.")
 
 __all__ = ["Command", "Endpoint", "Template", "TemplateRow", "StreamCheck", "ValidationResult", "Backup",
-           "BackupFile", "build_parser", "load_template", "load_partial_template", "radio_ready",
+           "BackupFile", "build_parser", "load_template", "load_partial_template", "radio_source_mounted",
            "preset_xml", "stream_verdict", "main"]
 
 
@@ -248,8 +248,8 @@ def load_partial_template(path: str) -> list[TemplateRow]:
     return rows
 
 
-def radio_ready(ip: str) -> bool:
-    """Has the speaker mounted the radio source yet?
+def radio_source_mounted(ip: str) -> bool:
+    """Has the speaker mounted LOCAL_INTERNET_RADIO, the source every preset write lands in?
 
     Writing presets before it has is silently undone by the same boot-time wipe they are meant to
     survive, so a restore run must do nothing at all in that window.
@@ -361,9 +361,9 @@ def build_parser() -> argparse.ArgumentParser:
                            if name == Command.RELATIVIZE else "where the backup is saved")
         else:
             p.add_argument("--template", required=True)
+        if name == Command.RESTORE:
             p.add_argument("--service", default="",
                            help="the service base URL; only used with --absolute")
-        if name == Command.RESTORE:
             p.add_argument("--absolute", action="store_true",
                            help="write the service host into each location (needs --service), "
                                 "for firmware that cannot resolve the relative form")
@@ -382,19 +382,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _harvest(args: argparse.Namespace, emit: Emit) -> int:
-    raw = pathlib.Path(args.backup).read_text(encoding="utf-8")
+    """Turn a saved presets XML into a template. Without --out the template travels INSIDE the
+    envelope, so stdout stays one JSON document."""
+    try:
+        raw = pathlib.Path(args.backup).read_text(encoding="utf-8")
+    except OSError as exc:
+        return emit(False, {"error": f"{args.backup}: {exc.strerror or exc}"}, code=2)
     entries = harvest_presets(parse_presets(raw))
     holes = [e for e in entries if not e.location]
-    body = json.dumps(Template(args.device_id, args.name, tuple(entries)).to_json(), indent=2,
-                      ensure_ascii=False)
-    if args.out:
-        pathlib.Path(args.out).write_text(body + "\n", encoding="utf-8")
-    else:
-        print(body)
-    return emit(not holes, {"presets": len(entries), "unresolved": len(holes),
-                            "needs_research": [e.name for e in holes],
-                            "kept": [e.name for e in entries if e.keep],
-                            "out": args.out or "(stdout)"})
+    template = Template(args.device_id, args.name, tuple(entries)).to_json()
+    report: dict[str, object] = {"presets": len(entries), "unresolved": len(holes),
+                                 "needs_research": [e.name for e in holes],
+                                 "kept": [e.name for e in entries if e.keep]}
+    if not args.out:
+        return emit(not holes, report | {"template": template})
+    try:
+        pathlib.Path(args.out).write_text(json.dumps(template, indent=2, ensure_ascii=False) + "\n",
+                                          encoding="utf-8")
+    except OSError as exc:
+        return emit(False, {"error": f"{args.out}: {exc.strerror or exc}"}, code=2)
+    return emit(not holes, report | {"out": args.out})
 
 
 def _validate(args: argparse.Namespace, emit: Emit) -> int:
@@ -430,14 +437,14 @@ def _check_or_restore(args: argparse.Namespace, cmd: Command, emit: Emit) -> int
                                **_host_bound_report(current)})
     if not todo:
         return emit(True, {"wrote": 0, "note": "already correct", **_host_bound_report(current)})
-    if not radio_ready(args.ip):
+    if not radio_source_mounted(args.ip):
         return emit(False, {"error": NOT_MOUNTED})
     if not args.confirm:
         return emit(False, {"would_write": len(todo),
                             "missing_streams": [p.location for p in todo],
                             "buttons": [p.button_number for p in todo],
                             "note": "re-run with --confirm to write these",
-                            "sharing": SHARING_NOTE})
+                            "sharing": SHARING_NOTE, **_host_bound_report(current)})
     return _restore(args, todo, wanted, emit)
 
 
@@ -451,9 +458,13 @@ def _restore(args: argparse.Namespace, todo: Sequence[PresetEntry], wanted: Sequ
         except OSError as exc:
             return emit(False, {"wrote": wrote, "error": f"{entry.name}: {exc}"}, code=2)
         time.sleep(0.5)
-    after = slots_to_write(parse_presets(http_get(f"http://{args.ip}:{API_PORT}/presets")), wanted)
+    try:
+        current = http_get(f"http://{args.ip}:{API_PORT}/presets")
+    except SpeakerError as exc:
+        return emit(False, {"wrote": wrote, "error": f"written, but not read back: {exc}"}, code=2)
+    after = slots_to_write(parse_presets(current), wanted)
     return emit(not after, {"wrote": wrote, "still_missing": [p.location for p in after],
-                            "sharing": SHARING_NOTE})
+                            "sharing": SHARING_NOTE, **_host_bound_report(current)})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -478,17 +489,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _host_bound_report(current: str) -> dict[str, object]:
-    """Which buttons name the service's address, as a warning that does not fail the check.
+    """Which radio buttons carry a host in their location, as a warning that does not fail.
 
-    The station on such a button is right, so the check passes; it is the location that stops
-    playing once the service moves, and `relativize` is what fixes it. Returns the envelope keys.
+    That is an absolute Orion location, whatever host it names (the service's, or a dead Bose one),
+    or the legacy /custom/v1/playback form. The station on such a button can be right, so the check
+    passes; it is the location that stops playing once that host moves or is gone, and `relativize`
+    is what fixes it. Returns the envelope keys.
     """
     buttons = [step.button for step in relativize_plan(current)]
     if not buttons:
         return {"host_bound": []}
     return {"host_bound": buttons,
-            "warning": f"buttons {buttons} name the service's address and stop playing when it "
-                       f"moves; `relativize` stores them again in the relative form"}
+            "warning": f"buttons {buttons} name a host in their location and stop playing when "
+                       f"that host moves or is gone; `relativize` stores them again in the "
+                       f"relative form"}
 
 
 def _relativize(ip: str, outdir: str, *, confirm: bool, emit: Emit) -> int:
@@ -504,11 +518,11 @@ def _relativize(ip: str, outdir: str, *, confirm: bool, emit: Emit) -> int:
         return emit(False, {"error": str(exc)}, code=2)
     buttons = [step.button for step in plan]
     if not plan:
-        return emit(True, {"rewrote": [], "note": "no radio preset names the service's address"})
+        return emit(True, {"rewrote": [], "note": "no radio preset names a host"})
     if not confirm:
         return emit(False, {"would_rewrite": buttons, "note": "re-run with --confirm to write these",
                             "sharing": SHARING_NOTE})
-    if not radio_ready(ip):
+    if not radio_source_mounted(ip):
         return emit(False, {"error": NOT_MOUNTED})
     saved = _backup(ip, outdir)
     if not saved.presets_path:
@@ -523,7 +537,12 @@ def _relativize(ip: str, outdir: str, *, confirm: bool, emit: Emit) -> int:
                                 "backup": saved.presets_path}, code=2)
         rewrote.append(step.button)
         time.sleep(0.5)
-    left = [step.button for step in relativize_plan(http_get(f"http://{ip}:{API_PORT}/presets"))]
+    try:
+        left = [step.button
+                for step in relativize_plan(http_get(f"http://{ip}:{API_PORT}/presets"))]
+    except SpeakerError as exc:
+        return emit(False, {"rewrote": rewrote, "error": f"written, but not read back: {exc}",
+                            "backup": saved.presets_path}, code=2)
     return emit(not left, {"rewrote": rewrote, "still_absolute": left, "backup": saved.presets_path,
                            "sharing": SHARING_NOTE})
 

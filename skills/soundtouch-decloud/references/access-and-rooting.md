@@ -9,7 +9,11 @@ owners never need more.
 It is open on most models, but not a guarantee: some hardened firmware builds do not expose it, and
 on a vanilla ST10 running 27.0.6 a probe found `envswitch` itself missing from the command table
 while other units on the same firmware family accept it. Treat a missing `envswitch` as a
-recoverable preflight result, not a broken speaker, and say so rather than retrying.
+property of that unit, not a broken speaker: no script checks for it in advance, and its reply
+shows in the `telnet` array of the `migrate` or `enable-ssh` envelope. Say so to the owner rather
+than retrying.
+
+## Port 22 and the clock
 
 **Port 22 is SSH, and is closed on a stock speaker. Open it where you can.** Not to satisfy a
 checklist: because the clock repair runs over it, and nothing on the speaker can do that job.
@@ -125,8 +129,11 @@ every response, so one request answers the question:
 curl -sD - -o /dev/null http://<speaker-ip>:8090/info | grep -i '^Date:'
 ```
 
-`soundtouch_find.py` reads that for every speaker it surveys and reports `clock-wrong` when the box
-is more than a day out, so a speaker with a dead clock is no longer reported as `ready`.
+`soundtouch_find.py` reads that header for every speaker it surveys and reports `clock-wrong` when
+the box is more than a day out, so a speaker with a dead clock is not reported as `ready`. It is the
+last check, so a speaker with any other fault reports that fault first, and a header that cannot be
+read leaves the verdict alone. The envelope's `clock` object carries the `verdict` and the box's own
+`reading`.
 
 The reading has limits. It is the box's LOCAL time, which the header then labels GMT, so a correct
 clock can read a whole UTC offset out - judge it in days, never in seconds. It is a diagnosis and
@@ -152,8 +159,10 @@ uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
     --service http://<service-host>:8000 enable-ssh --confirm
 ```
 
-It checks the precondition below first, refuses if it is not met, reports what it would run without
-`--confirm`, and tells you the next step afterwards.
+It does nothing if port 22 is already open. Otherwise it checks the precondition below and refuses
+if it is not met (exit 2, a question left unanswered). Without `--confirm` it reports what it would
+run. With it, it writes the injection, polls port 22 for 30 seconds (150 seconds with
+`--full-config`, which reboots), reports `ssh_open`, and tells you the next step.
 
 Then run the migration, always. The method leaves shell text in a live configuration value and only
 this takes it out:
@@ -189,7 +198,8 @@ envswitch boseurls set "http://<service-host>:8000;touch /tmp/remote_services;/e
 ```
 
 **The injection fires when the speaker READS the value, and on some units that is only at the next
-boot.** Measured on a SoundTouch 20 on 27.0.6.46330: the command replied OK, port 22 stayed refused,
+boot.** Measured on a SoundTouch 20 on 27.0.6.46330: the command was accepted and returned to the
+`->` prompt, port 22 stayed refused,
 and `state` showed all four URLs clean - because `envswitch boseurls set` writes the STORED
 configuration while `state` reads `getpdo CurrentSystemConfiguration`, which is the RUNTIME one.
 They are two different values until a boot copies one onto the other, so `getpdo` cannot confirm
@@ -198,7 +208,8 @@ this write before a reboot. After one, the runtime `margeServerUrl` carried the 
 
 A refused port 22 straight after the write is therefore not a failure and not grounds for the fuller
 form. `enable-ssh` reports it as a question left unanswered (exit 2) and tells you to run
-`reboot --confirm` and look again.
+`reboot --confirm` and check port 22 again; `uv run scripts/soundtouch_find.py --ip <speaker-ip>`
+shows it in its `ports` object (key `22`).
 
 Only if port 22 is still refused after that reboot does the speaker need the fuller form, which also
 puts the injection on the runtime `sys configuration` key and reboots by itself. Both differences
@@ -214,24 +225,22 @@ records the automation of it as candidate behaviour still awaiting confirmation 
 ST10 and CineMate 520 units never start `sshd` over telnet at all and need the serial or U-Boot
 route, which is outside this skill.
 
-**A Wireless Link Adapter on 20.0.6 is in that last group, measured 2026-09-20.** Both forms were
-tried on one, in order, each followed by a reboot and the full readiness window.
-The injection reached the runtime `margeServerUrl` every time - so the write, the persistence and
-the boot copy all work - and port 22 stayed refused. That firmware never passes the value through
+**A Wireless Link Adapter on 20.0.6 is in that last group.** With either form, each followed by a
+reboot and the full readiness window, the injection reaches the runtime `margeServerUrl` every
+time, so the write, the persistence and the boot copy all work, and port 22 stays refused. That firmware never passes the value through
 a shell. The tell that separates it from a speaker that simply needs more time: `getpdo` shows the
 injection live and `sshd` is still not running. Do not keep escalating on such a unit; clean the
 injection off with `migrate --confirm` so no shell text is left in a live configuration value, and
 tell the owner it needs physical access.
 
-Pauses between the commands are unnecessary. A controlled A/B across three variants found identical
-outcomes at zero and five second gaps, which retracted an earlier theory that the gap mattered.
+Pauses between the commands are unnecessary: a controlled A/B across three variants found
+identical outcomes at zero and five second gaps.
 
-### Older firmware
+### `remote_services on` is a dead path
 
-`remote_services on` over port 17000 was the old way in. It was **removed in firmware 7.x** and is
-absent through the 8.x-14.x era as well, so on anything recent it is a dead path rather than a first
-thing to try. Firmware 27.x is what this migration targets, and `sys configuration` and `envswitch`
-are confirmed working there on ST10, ST20, ST300, Wave III and Wave IV.
+`remote_services on` over port 17000 does not exist on firmware 7.x and later, so it is a dead path
+on anything this migration targets. That is firmware 27.x, and `sys configuration` and `envswitch` are confirmed working there on ST10,
+ST20, ST300, Wave III and Wave IV, with the one ST10 exception noted at the top of this file.
 
 ### When the account field lies: `--assume-paired`
 
@@ -250,8 +259,10 @@ uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
     --service http://<service-host>:8000 enable-ssh --assume-paired --confirm
 ```
 
-The envelope then carries `precondition_bypassed`, so a later reader can tell a skipped check from
-a satisfied one. Do NOT reach for this on a speaker that is genuinely unpaired: there the
+The envelope of the confirmed run then carries `precondition_bypassed`, so a later reader can tell
+a skipped check from a satisfied one; a dry run without `--confirm` shows `account: (empty;
+proceeding on --assume-paired)`. `soundtouch_find.py` reads the same field, so on such firmware it
+reports a paired speaker as `needs-account`: judge that verdict from the service side as well. Do NOT reach for this on a speaker that is genuinely unpaired: there the
 precondition is right, the injection has no read cycle to fire on, and the run does nothing at all
 while appearing to succeed.
 

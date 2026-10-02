@@ -5,22 +5,23 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 
 ## Symptom to cause
 
-| Symptom                                                                | Cause                                                                                                                                                                                                                                          |
-|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Service starts, finds no speakers at all                               | Bridge networking. Discovery is multicast; use host networking                                                                                                                                                                                 |
-| One speaker missing, others found                                      | Asleep, on a guest network, or on a different subnet                                                                                                                                                                                           |
-| `/sources` lists no radio source                                       | `bmxRegistryUrl` still points at the dead cloud                                                                                                                                                                                                |
-| All four URLs local, still no radio source                             | No account bound; check `margeAccountUUID`                                                                                                                                                                                                     |
-| Presets accepted, gone after every reboot                              | The boot wipe. Try a per-speaker account id, then the player's "Keep ours" or "Refresh sources on speaker"; see references/presets.md                                                                                                          |
-| Preset selected, nothing plays, gives up after ~20 s                   | The location is a raw stream URL, not the Orion station adapter                                                                                                                                                                                |
-| Buffering, then gives up after ~20 s                                   | Format is right. Either the audio never arrived, or upstream issue #604                                                                                                                                                                        |
-| Stations and presets fail though every URL is local and all read READY | The service's registry names another host: a copied install's `settings.json` `server_url` beats `SERVER_URL`. `soundtouch_find.py` says `registry-foreign`; see below                                                                         |
-| Everything worked, then all speakers broke at once                     | The service's address changed                                                                                                                                                                                                                  |
-| Values written, all replied OK, gone after reboot                      | `envswitch` was written before the `sys configuration` writes                                                                                                                                                                                  |
-| SSH worked, gone after a reboot                                        | The flash marker was never written                                                                                                                                                                                                             |
-| Speaker plays but ignores presets, source reads LOCAL                  | A Lifestyle console sitting on its own input, not SoundTouch                                                                                                                                                                                   |
-| Everything else checks out, plays nothing, service sees NO request     | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below                                                                                                                                                               |
-| Plain-HTTP stations play, every HTTPS one dies at BUFFERING            | The speaker's clock. No RTC battery, so a power cut resets it to 2015 and TLS fails. `soundtouch_find.py` reports this as `clock-wrong`, read from the speaker's own Date header and so also on a box with no shell; see access-and-rooting.md |
+| Symptom                                                                | Cause                                                                                                                                                                                                                                                                             |
+|------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Service starts, finds no speakers at all                               | Bridge networking. Discovery is multicast; use host networking, or on Docker Desktop `render --network ports` and add each speaker by IP                                                                                                                                          |
+| One speaker missing, others found                                      | Asleep, on a guest network, or on a different subnet                                                                                                                                                                                                                              |
+| `/sources` lists no radio source                                       | `bmxRegistryUrl` still points at the dead cloud                                                                                                                                                                                                                                   |
+| All four URLs local, still no radio source                             | No account bound; `soundtouch_find.py` says `needs-account` (see migration.md for firmware that reports a paired speaker as unbound)                                                                                                                                              |
+| `soundtouch_find.py` says `unreadable`                                 | The speaker answers on 8090 but a read of its `/info`, `/sources` or `/presets` failed, usually because it is still booting; the envelope's `*_error` field says which. Wait 90 seconds and run it again; if it stays, `soundtouch_onboard.py --ip <speaker-ip> reboot --confirm` |
+| Presets accepted, gone after every reboot                              | The boot wipe. Try a per-speaker account id, then the player's "Keep ours" or "Refresh sources on speaker"; see references/presets.md                                                                                                                                             |
+| Preset selected, nothing plays, gives up after ~20 s                   | The location is a raw stream URL, not the Orion station adapter                                                                                                                                                                                                                   |
+| Buffering, then gives up after ~20 s                                   | Format is right. Either the audio never arrived, or upstream issue #604                                                                                                                                                                                                           |
+| Stations and presets fail though every URL is local and all read READY | The service's registry names another host: a copied install's `settings.json` `server_url` beats `SERVER_URL`. `soundtouch_find.py` says `registry-foreign`; see below                                                                                                            |
+| Everything worked, then all speakers broke at once                     | The service's address changed. Re-render the compose file, migrate and reboot every speaker again, then run `soundtouch_presets.py check --ip <speaker-ip> --template <template>` and `relativize` any buttons it lists under `host_bound`; see service-setup.md and presets.md   |
+| Values written, all accepted, gone after reboot                        | `envswitch` was written before the `sys configuration` writes                                                                                                                                                                                                                     |
+| SSH worked, gone after a reboot                                        | The flash marker was never written                                                                                                                                                                                                                                                |
+| Speaker plays but ignores presets, source reads LOCAL                  | A Lifestyle console sitting on its own input, not SoundTouch                                                                                                                                                                                                                      |
+| Everything else checks out, plays nothing, service sees NO request     | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below                                                                                                                                                                                                  |
+| Plain-HTTP stations play, every HTTPS one dies at BUFFERING            | The speaker's clock. No RTC battery, so a power cut resets it to 2015 and TLS fails. `soundtouch_find.py` reports this as `clock-wrong`, read from the speaker's own Date header and so also on a box with no shell; see access-and-rooting.md                                    |
 
 ## The registry names another host
 
@@ -33,8 +34,9 @@ machine - keeps sending every speaker to the old address. Every speaker still re
 every source still reads READY, and radio fails; absolute presets that name the right host keep
 playing, which hides it further.
 
-`soundtouch_service.py health --service <service>` says no, and `soundtouch_find.py` says `registry-foreign`, when it
-happens. To see it by hand:
+`soundtouch_service.py health --service <service>` says no when it happens, and `soundtouch_find.py`
+says `registry-foreign` for any speaker whose port 17000 answers (it reads the registry address from
+the speaker's own configuration). To see it by hand:
 
 ```bash
 curl -s http://<service-host>:8000/bmx/registry/v1/services | grep -o 'http[s]*://[^/"]*' | sort | uniq -c
@@ -55,9 +57,9 @@ uv run scripts/soundtouch_onboard.py --ip <speaker-ip> reboot --confirm
 
 A speaker reads the registry when it starts and keeps the base URLs it got until it restarts.
 `health` and `soundtouch_find.py` read the registry from the SERVICE, so both say ok straight
-after the fix while every speaker still resolves against the old address. Measured: a relative
-preset on a speaker that had not restarted since the fix was pressed, fetched nothing, and left
-the speaker on its previous station; after one reboot the same button played. `reboot` puts the
+after the fix while every speaker still resolves against the old address. Measured: until the
+speaker restarts, a relative preset fetches nothing and leaves the speaker on its previous station;
+after one reboot the same button plays. `reboot` puts the
 volume back afterwards, because a reboot can reset it (two ST20s came back at 10), and if a
 speaker does not return on its address it says so: one on plain DHCP can come back on another.
 The same applies after ANY registry change, including moving the service to a new address.
@@ -156,7 +158,8 @@ before concluding a port is genuinely closed rather than slow. Most "it did not 
 check made thirty seconds after a reboot.
 
 Presets returning after a power cut depends on the speaker fetching them from the service once
-it is up, so give it the same two minutes, then run `check` rather than assuming either way.
+it is up, so give it the same two minutes, then run
+`soundtouch_presets.py check --ip <speaker-ip> --template <template>` rather than assuming either way.
 
 ## Still stuck: read the upstream documentation
 

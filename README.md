@@ -51,12 +51,14 @@ Use the soundtouch-decloud skill to get my SoundTouch speakers working again.
 ```
 
 From there it works in phases, checking in after each one: check the prerequisites and help you
-install whatever is missing, find the speakers, stand up the service, back up every speaker BEFORE
-anything changes, rewrite the four service URLs, wait for the radio sources, recover and verify the
-stations, write the presets, then prove it by listening rather than by counting.
+install whatever is missing, ask which speakers you have, stand up the service, find the speakers,
+back up every speaker BEFORE anything changes, open SSH only if something needs it, rewrite the
+four service URLs, wait for the radio sources, recover and verify the stations, write the presets,
+then prove it by listening rather than by counting.
 
 If you would rather see the prerequisite check before installing anything, clone this repo and run
-it directly. It needs nothing but Python, because `uv` is one of the things it looks for:
+it directly. It needs nothing but Python 3.9 or newer, because `uv` is one of the things it looks
+for, and it says so when that Python is older than the 3.11 the other scripts need:
 
 ```bash
 python3 skills/soundtouch-decloud/scripts/soundtouch_preflight.py
@@ -68,30 +70,34 @@ the next reboot.
 
 ## What it can do
 
-The skill carries five reference files and four scripts. Every script prints a JSON envelope and
+The skill carries five reference files and five scripts. Every script prints a JSON envelope and
 uses the same exit codes: 0 yes, 1 no, 2 could not tell. Anything that CHANGES a speaker needs an
 explicit `--confirm`, so the read half is always safe to run.
 
-| Script                    | What it does                                                                               |
-|---------------------------|--------------------------------------------------------------------------------------------|
-| `soundtouch_preflight.py` | Report which prerequisites are installed and how to install the rest (run with `python3`)  |
-| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check the service is answering          |
-| `soundtouch_find.py`      | Discover speakers on the network and report the state each one is in                       |
-| `soundtouch_onboard.py`   | Open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
-| `soundtouch_presets.py`   | Back up, harvest, validate, check, restore and relativize presets                          |
+| Script                    | What it does                                                                                                       |
+|---------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed and how to install the rest (run with `python3`)                          |
+| `soundtouch_service.py`   | Check Docker, write the compose file, check the service answers and its registry names this address                |
+| `soundtouch_find.py`      | Discover speakers on the network and give each one a verdict on what to do next                                    |
+| `soundtouch_onboard.py`   | Report migration state, open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
+| `soundtouch_presets.py`   | Back up, harvest, validate, check, restore and relativize presets                                                  |
 
 Beyond the mechanics, the skill knows the things that are easy to get wrong and hard to diagnose:
 
-- **Bridge networking looks installed and is useless.** The service answers HTTP and discovers
-  nothing. It needs host networking.
+- **Bridge networking looks installed and finds nothing.** The service answers HTTP but cannot
+  discover speakers, because discovery is multicast. On Linux use host networking (the default of
+  `render`); on Docker Desktop for Windows or macOS use `render --network ports` and add each
+  speaker by IP.
 - **Rewriting only the account URL** produces a speaker that registers, syncs presets and plays
   nothing, because radio source types arrive through a different URL.
 - **The URL write order is load-bearing.** Persisting before writing saves the OLD values, and
-  every command still answers OK.
+  every command is still accepted.
 - **A raw stream URL in a preset is accepted at write time and never plays.** The speaker follows
   the location expecting a station document, not audio. Presets are written in AfterTouch's
   relative form (`/station?data=...`), which the speaker resolves through the service's registry,
-  so they keep playing when the service moves; the older absolute form is still read.
+  so they keep playing when the service moves. `check` and `restore` name any button whose
+  location still carries a host (the absolute form, or a decodable legacy `/custom/v1/playback` form)
+  under `host_bound`, and `relativize` stores those again in the relative form.
 - **A copied service keeps the old address.** Its `settings.json` `server_url` beats the
   `SERVER_URL` it is started with, so the registry sends every speaker to the machine it was
   copied from. `soundtouch_service.py health --service <service>` checks for it.
@@ -107,10 +113,11 @@ right but stays silent usually comes from. The skill does it in four steps:
    search for. That needs the presets as they were BEFORE the migration, and the replacement
    service does not keep them: it stores each speaker's presets as it sees them from then on
    (`accounts/<account>/devices/<id>/Presets.xml` in its data directory), and at migration it
-   copies only two configuration files. So the skill runs `backup` before it migrates anything.
+   saves no presets at all: over SSH it keeps two configuration files, over telnet not even those.
+   So the skill runs `backup` before it migrates anything.
 
    ```bash
-   uv run scripts/soundtouch_presets.py harvest --backup <presets.xml> --out <speaker>.json
+   uv run skills/soundtouch-decloud/scripts/soundtouch_presets.py harvest --backup <presets.xml> --out <speaker>.json
    ```
 
    A preset that came from a catalogue source instead holds a station id and no stream. Those come
@@ -128,11 +135,11 @@ right but stays silent usually comes from. The skill does it in four steps:
    the stream:
 
    ```bash
-   uv run scripts/soundtouch_presets.py validate --template <speaker>.json
+   uv run skills/soundtouch-decloud/scripts/soundtouch_presets.py validate --template <speaker>.json
    ```
 
-   It reports per button: `audio` (playable), `playlist`, `hls`, `not-audio`, `dead`, or `missing`
-   for a hole nobody has researched yet. Stations move and die: of six presets recovered from one
+   It reports per button: `audio` (playable), `playlist`, `hls`, `not-audio`, `dead`, `missing`
+   for a hole nobody has researched yet, or `kept` for a non-radio preset it does not fetch. Stations move and die: of six presets recovered from one
    household's pre-shutdown backup, one had already gone dead. An `.m3u` playlist is the other
    trap, because it is served as `audio/x-mpegurl` and passes a naive check for `audio/` while
    containing no audio at all.
@@ -146,12 +153,12 @@ writes on its own: since AfterTouch v0.137.0 a preset written to one speaker is 
 others on the account, so a repair loop on one box overrules the owner on all of them.
 
 What the skill adds is a snapshot of each speaker's presets kept off the service, a one-shot
-`restore` from it, and a read-only `check` to run on a schedule as an alarm. Measured at one site
-over 18.7 days, a restore loop running every two minutes made 11692 runs and wrote presets
-exactly once, in its first hour, cleaning up a loss that predated it. So measure before
-automating anything. The alarm keeps "a speaker is short of presets" and "a speaker did not
-answer" apart, because they need different patience: at that same site one sleeping WiFi
-speaker produced 1303 unreadable readings out of 11692 while never once being short.
+`restore` from it, and a read-only `check` to run on a schedule as an alarm. Measured at one
+site, a restore loop running every two minutes for weeks wrote presets exactly once, in its first
+hour, cleaning up a loss that predated it. So measure before automating anything. The alarm keeps
+"a speaker is short of presets" and "a speaker did not answer" apart, because they need different
+patience: at that same site one sleeping WiFi speaker was regularly unreadable while never once
+being short.
 
 ## Run the tests
 
@@ -165,7 +172,9 @@ python -m pytest -q
 
 `scripts/check_repo.py` checks the repo's own conventions: the manifests agree with the directory
 they describe, the skill's frontmatter is the shape the router needs, every shipped script is
-named by a test, and nothing arrived with CRLF. CI runs both on Linux, Windows and macOS.
+named by a test, and nothing arrived with CRLF or a typographic character (em-dash, curly quote,
+ellipsis, non-breaking space, BOM). CI runs the tests on Linux, Windows and macOS, and the
+conventions gate on Linux.
 
 ## Changelog
 
@@ -177,9 +186,10 @@ Every release is described in [CHANGELOG.md](CHANGELOG.md).
 skills/soundtouch-decloud/
   SKILL.md          the index and the walkthrough
   references/       service setup, access and rooting, migration, presets, troubleshooting
-  scripts/          the four tools plus their shared core
+  scripts/          the five tools plus their shared core
   tests/            their tests
 scripts/check_repo.py   the repo conventions gate
+scripts/tests/          its tests
 ```
 
 ## License

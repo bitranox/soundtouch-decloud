@@ -3,6 +3,11 @@
 
     uv run scripts/soundtouch_find.py --service http://192.0.2.10:8000
     uv run scripts/soundtouch_find.py --ip 192.0.2.31
+
+Prints a JSON envelope with one verdict per speaker, the first that applies of: not-answering,
+needs-migration, registry-foreign, unreadable, needs-account, sources-not-ready, needs-presets,
+clock-wrong, ready. Exit 0 when every speaker answered, whatever its verdict; 1 when one did not
+or none was found; 2 when the service could not be read.
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ class SpeakerVerdict(StrEnum):
     NOT_ANSWERING = "not-answering"
     NEEDS_MIGRATION = "needs-migration"
     REGISTRY_FOREIGN = "registry-foreign"
-    INFO_UNREADABLE = "info-unreadable"
+    UNREADABLE = "unreadable"
     NEEDS_ACCOUNT = "needs-account"
     SOURCES_NOT_READY = "sources-not-ready"
     NEEDS_PRESETS = "needs-presets"
@@ -155,9 +160,11 @@ def classify(state: SpeakerState) -> SpeakerVerdict:
     # an unreadable registry is not knowing, and DNS mode names the Bose cloud on purpose.
     if state.registry is not None and state.registry.verdict == RegistryVerdict.FOREIGN:
         return SpeakerVerdict.REGISTRY_FOREIGN
-    # A failed /info read never saw the account, so it must not be reported as a missing one.
-    if state.info_error is not None:
-        return SpeakerVerdict.INFO_UNREADABLE
+    # A failed read never saw what it was asked for: no account, no sources and no presets must
+    # not be claimed from a question the speaker did not answer. The *_error fields say which.
+    if any(error is not None
+           for error in (state.info_error, state.sources_error, state.presets_error)):
+        return SpeakerVerdict.UNREADABLE
     if state.info is None or not state.info.account:
         return SpeakerVerdict.NEEDS_ACCOUNT
     if state.sources is not None and not state.sources.radio_ready():
@@ -188,16 +195,17 @@ _ADVICE: Mapping[SpeakerVerdict, str] = {
         "in the service's settings.json (or its Settings page), restart it, "
         "then restart every speaker: a speaker reads these addresses when it "
         "starts and keeps the old ones until it restarts."),
-    SpeakerVerdict.INFO_UNREADABLE: (
-        "This speaker answers on the network but would not say who it is or "
-        "which account it has. If it was just restarted, give it about 80 "
+    SpeakerVerdict.UNREADABLE: (
+        "This speaker answers on the network but did not answer every question "
+        "about itself (its account, radio sources or presets), so nothing can be "
+        "said about those yet. If it was just restarted, give it about 90 "
         "seconds and look again; if it stays this way, restart it."),
     SpeakerVerdict.NEEDS_ACCOUNT: (
         "This speaker has no account attached, so it will not load any radio at "
         "all until one is bound to it."),
     SpeakerVerdict.SOURCES_NOT_READY: (
         "This speaker has not finished loading its radio sources. If it was "
-        "just restarted, give it about 80 seconds and look again."),
+        "just restarted, give it about 90 seconds and look again."),
     SpeakerVerdict.NEEDS_PRESETS: "This speaker is working but has no presets on it yet.",
     SpeakerVerdict.CLOCK_WRONG: (
         "This speaker's clock is years out, which happens after a power cut because "

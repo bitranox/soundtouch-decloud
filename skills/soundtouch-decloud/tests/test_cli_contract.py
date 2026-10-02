@@ -81,7 +81,7 @@ def _envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
 
 
 def test_render_prints_a_json_envelope_not_bare_yaml(capsys: pytest.CaptureFixture[str]) -> None:
-    """SKILL.md says every script prints a JSON envelope; render used to print raw YAML."""
+    """SKILL.md says every script prints a JSON envelope, render included: the YAML is a field."""
     rc = S.main(["render", "--host", "192.0.2.10"])
     body = _envelope(capsys)
     assert rc == 0 and body["ok"] is True
@@ -156,16 +156,18 @@ def test_the_changing_subcommands_all_require_confirm(cmd: str) -> None:
 
 
 def test_restore_requires_confirm_but_check_does_not() -> None:
-    common = ["--ip", "192.0.2.31", "--template", "t.json", "--service", "http://192.0.2.10:8000"]
+    common = ["--ip", "192.0.2.31", "--template", "t.json"]
     assert P.build_parser().parse_args(["restore", *common]).confirm is False
     assert not hasattr(P.build_parser().parse_args(["check", *common]), "confirm")
 
 
-def test_check_and_restore_no_longer_need_a_service() -> None:
-    """The relative form names no host, so the service address is only for --absolute."""
+def test_the_service_address_belongs_to_restore_absolute_only() -> None:
+    """The relative form names no host, so only restore --absolute takes the service address;
+    check never writes and refuses the flag rather than ignoring it."""
     common = ["--ip", "192.0.2.31", "--template", "t.json"]
     assert P.build_parser().parse_args(["restore", *common]).service == ""
-    assert P.build_parser().parse_args(["check", *common]).service == ""
+    with pytest.raises(SystemExit):
+        P.build_parser().parse_args(["check", *common, "--service", "http://192.0.2.10:8000"])
 
 
 def test_relativize_requires_confirm() -> None:
@@ -244,11 +246,10 @@ def test_the_full_form_reboots_itself_so_a_closed_port_is_a_definite_no(
 def test_a_redirect_ends_the_command_but_a_placeholder_argument_does_not() -> None:
     """A documented line may log to a file; the shell part is not argv and must not be parsed."""
     line = ("uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <file> "
-            "--service <service> >> /var/log/soundtouch-check.log 2>&1")
+            ">> /var/log/soundtouch-check.log 2>&1")
     (name, argv), = _usage_lines(line)
     assert name == "soundtouch_presets.py"
-    assert argv == ["check", "--ip", "<speaker-ip>", "--template", "<file>",
-                    "--service", "<service>"]
+    assert argv == ["check", "--ip", "<speaker-ip>", "--template", "<file>"]
     P.build_parser().parse_args(argv)
 
 

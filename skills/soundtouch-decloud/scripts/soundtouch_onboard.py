@@ -3,11 +3,9 @@
 
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 state
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 --service http://192.0.2.10:8000 migrate --confirm
-    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 \
-                                         --service http://192.0.2.10:8000 enable-ssh --confirm
+    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 --service http://192.0.2.10:8000 enable-ssh --confirm
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 reboot --confirm
-    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 play --preset 1 \
-                                         --expect "Example Radio" --confirm
+    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 play --preset 1 --expect "Example Radio" --confirm
 
 Nothing that changes the speaker runs without --confirm.
 """
@@ -274,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ip", required=True)
-    parser.add_argument("--service", help="AfterTouch base URL (needed for migrate)")
+    parser.add_argument("--service", help="AfterTouch base URL (needed for migrate and enable-ssh)")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("state")
     p_mig = sub.add_parser("migrate", help="rewrite the four service URLs")
@@ -322,7 +320,7 @@ def _cmd_state(opts: Options) -> int:
 
 def _cmd_migrate(opts: Options) -> int:
     if not opts.service:
-        return _emit(opts.command, False, {"error": "--service is required for migrate"})
+        return _emit(opts.command, False, {"error": "--service is required for migrate"}, code=2)
     if not opts.confirm:
         return _emit(opts.command, False,
                      {"would_run": build_url_commands(opts.service),
@@ -344,7 +342,7 @@ def _cmd_migrate(opts: Options) -> int:
 def _cmd_enable_ssh(opts: Options) -> int:
     command = opts.command
     if not opts.service:
-        return _emit(command, False, {"error": "--service is required for enable-ssh"})
+        return _emit(command, False, {"error": "--service is required for enable-ssh"}, code=2)
     if port_open(opts.ip, SSH_PORT):
         return _emit(command, True, {"note": "port 22 is already open; nothing to do"})
     bound = account_uuid(opts.ip)
@@ -500,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
             case _:
                 assert_never(opts.command)
     except SpeakerError as exc:
-        return _emit(opts.command, False, {"error": str(exc)})
+        # The speaker did not answer, so the question is open rather than answered no.
+        return _emit(opts.command, False, {"error": str(exc)}, code=2)
 
 
 if __name__ == "__main__":

@@ -230,6 +230,6 @@ def test_a_refused_key_press_answers_with_an_envelope_not_a_traceback(refusing_s
     monkeypatch.setattr(O.time, "sleep", lambda _s: None)
     rc = O.main(["--ip", refusing_speaker, "play", "--expect", "x", "--confirm"])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 1
+    assert rc == 2
     assert out["ok"] is False and out["command"] == "play"
     assert "/key" in out["data"]["error"]

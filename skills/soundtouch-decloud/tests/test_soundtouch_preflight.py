@@ -5,9 +5,13 @@ these run with the lookup injected and nothing on the real PATH. A checker only 
 everything is installed has never been asked the question it exists to answer.
 """
 import json
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 import soundtouch_preflight as P
+from soundtouch_service import INSTALL_HINTS
 
 
 def _which(*present: str) -> P.WhichFn:
@@ -203,3 +207,32 @@ def test_a_missing_python_gains_an_install_line_and_the_original_is_untouched(mo
     assert result.present is False
     assert "apt install python3" in (result.install or "")
     assert P.check_python().install is None
+
+
+def test_an_owner_answer_gets_its_family_s_compose_and_python_advice():
+    """`--system ubuntu` is what an owner types; it must not fall back to the generic hint."""
+    compose = P.check_compose("ubuntu", which=_which(), version=_version)
+    assert compose.install == P.check_compose("debian", which=_which(), version=_version).install
+    assert "apt" in (compose.install or "")
+
+
+def test_every_owner_answer_the_docker_hints_know_maps_to_a_known_family():
+    for answer in INSTALL_HINTS:
+        assert P.system_family(answer) in set(P.SystemFamily), answer
+
+
+OLD_PYTHONS = [name for name in ("python3.9", "python3.10") if shutil.which(name)]
+
+
+@pytest.mark.skipif(not OLD_PYTHONS, reason="no Python 3.9 or 3.10 on PATH to run the script under")
+@pytest.mark.parametrize("interpreter", OLD_PYTHONS)
+def test_preflight_reports_a_python_older_than_the_floor_instead_of_crashing(interpreter):
+    """The owner most likely to need this check is the one whose Python is too old for the rest."""
+    script = Path(P.__file__).resolve()
+    run = subprocess.run([shutil.which(interpreter) or interpreter, str(script), "--system", "ubuntu"],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         timeout=60, check=False)
+    out = json.loads(run.stdout)
+    python = next(c for c in out["data"]["checks"] if c["tool"] == "python")
+    assert run.returncode == 1 and python["present"] is False, run.stderr
+    assert "apt" in python["install"]

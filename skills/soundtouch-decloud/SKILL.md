@@ -43,7 +43,7 @@ Ask one question at a time. Prefer multiple choice. Check in after each phase.
 | 1     | Ask which speakers and models. Warn about stereo pairs before anything else        | this file, below      |
 | 2     | Decide where the service runs and PIN that address                                 | service-setup.md      |
 | 3     | Check Docker is installed; if not, walk them through installing it                 | service-setup.md      |
-| 4     | Start the container with host networking, verify it answers                        | service-setup.md      |
+| 4     | Start the container (host networking on Linux), verify it answers                  | service-setup.md      |
 | 5     | Find the speakers; ask the owner to wake any that do not answer                    | service-setup.md      |
 | 6     | Back up every speaker BEFORE any change                                            | presets.md            |
 | 7     | Open SSH IF something needs it, make it persist; set TZ, clock display, language   | access-and-rooting.md |
@@ -64,7 +64,8 @@ things this checks for, so a checker written the usual way could not run on the 
 it most.
 
 It reports Python, `uv`, Docker and the compose plugin on separate lines, each with a per-platform
-install instruction when it is missing, and exits 1 if anything required is absent. Docker and
+install instruction when it is missing, and exits 1 if anything required is absent. It starts on
+Python 3.9 or newer, so it can also report a Python older than the 3.11 the other scripts need. Docker and
 compose are separate because having the engine without the plugin is common, and the fix is a
 different package. `pytest` is reported and never required: it is for people changing the skill,
 not using it.
@@ -107,18 +108,18 @@ checker that needs the missing tool is no checker at all.
 Each prints a JSON envelope; exit 0 yes, 1 no, 2 error. Anything that CHANGES a speaker requires
 `--confirm`, so the read half is always safe to run.
 
-| Script                    | Use it to                                                                                                                                         |
-|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                      |
-| `soundtouch_service.py`   | Check Docker, write and validate the compose file, check service health                                                                           |
-| `soundtouch_find.py`      | Discover speakers and report what state each is in                                                                                                |
-| `soundtouch_onboard.py`   | Open SSH, migrate the URLs, reboot, prove a preset really played                                                                                  |
-| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert host-bound presets to the relative form |
+| Script                    | Use it to                                                                                                                                           |
+|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                        |
+| `soundtouch_service.py`   | Check Docker, write the compose file (refusing an address the speakers cannot reach), check the service answers and its registry names this address |
+| `soundtouch_find.py`      | Discover speakers and give each one a verdict; the verdict words and their order are in its `--help`                                                |
+| `soundtouch_onboard.py`   | Report migration state, open SSH, migrate the URLs, reboot and wait for the radio sources, prove a preset really played                             |
+| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert host-bound presets to the relative form   |
 
 ## When it does not work
 
-Work `references/troubleshooting.md` first: it maps each symptom to its cause, and most reports land
-on one of four causes. If the symptom is not there, or the fix does not hold, READ THE UPSTREAM
+Work `references/troubleshooting.md` first: it maps each symptom to its cause, and the commonest by
+a wide margin is a speaker whose URLs still point at the dead cloud. If the symptom is not there, or the fix does not hold, READ THE UPSTREAM
 DOCUMENTATION rather than guessing - the project is actively developed and its guides move ahead of
 any local copy:
 
@@ -134,18 +135,18 @@ issue rather than something they did wrong.
 
 ## Common mistakes
 
-| Mistake                                                            | What happens                                                                                                                                                                                                               |
-|--------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Bridge networking, or adding a `ports:` block                      | Service answers HTTP and discovers nothing. Looks installed, is useless                                                                                                                                                    |
-| Migrating before backing up the presets                            | A migration that leaves `bmxRegistryUrl` on the cloud makes the speaker discard every preset and send its empty set back to the service. Observed once, six presets. A REBOOT does not do this - see references/presets.md |
-| Running `restore` on a timer                                       | A silent writer for a loss that is usually not happening. It reverts any station changed on the speaker, and since AfterTouch v0.137.0 on every speaker of the account                                                     |
-| Rewriting only the account URL                                     | Presets sync and nothing ever plays                                                                                                                                                                                        |
-| Writing the persisting command before the others                   | Every value reverts at the next reboot although each replied OK                                                                                                                                                            |
-| Skipping the persistent marker after opening SSH                   | Access is gone at the next boot and looks like it never worked                                                                                                                                                             |
-| Putting the raw stream URL in a preset                             | Accepted at write time, never plays                                                                                                                                                                                        |
-| Writing a harvested or researched stream without fetching it first | A station that moved or died is accepted at write time and stays silent. One of six harvested presets was already dead                                                                                                     |
-| Treating an `.m3u`/`.pls` link as the stream                       | Served as `audio/x-mpegurl`, so an `audio/` test passes a text file that plays nothing                                                                                                                                     |
-| Copying a service's data directory to set up another one           | Its `settings.json` `server_url` beats `SERVER_URL`, so the registry sends every speaker to the old machine. `soundtouch_service.py health --service <service>` says no; see troubleshooting.md                            |
-| Fixing the registry without rebooting the speakers                 | Each speaker keeps the registry it read at boot, so radio and relative presets still go to the old address while every check reads ok                                                                                      |
-| Letting the service's address come from plain DHCP                 | Every speaker breaks at once, weeks later, when the lease changes                                                                                                                                                          |
-| Declaring failure 30 seconds after a reboot                        | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging                                                                                                                                                |
+| Mistake                                                            | What happens                                                                                                                                                                                                                                           |
+|--------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Bridge networking on Linux                                         | Service answers HTTP and discovers nothing. On Docker Desktop, `render --network ports` is the supported route: add each speaker by IP                                                                                                                 |
+| Migrating before backing up the presets                            | A migration that leaves `bmxRegistryUrl` on the cloud makes the speaker discard every preset and send its empty set back to the service. Observed once, six presets. A REBOOT does not do this - see references/migration.md and references/presets.md |
+| Running `restore` on a timer                                       | A silent writer for a loss that is usually not happening. It reverts any station changed on the speaker, and since AfterTouch v0.137.0 on every speaker of the account                                                                                 |
+| Rewriting only the account URL                                     | Presets sync and nothing ever plays                                                                                                                                                                                                                    |
+| Writing the persisting command before the others                   | Every value reverts at the next reboot although each was accepted                                                                                                                                                                                      |
+| Skipping the persistent marker after opening SSH                   | Access is gone at the next boot and looks like it never worked                                                                                                                                                                                         |
+| Putting the raw stream URL in a preset                             | Accepted at write time, never plays                                                                                                                                                                                                                    |
+| Writing a harvested or researched stream without fetching it first | A station that moved or died is accepted at write time and stays silent. One of six harvested presets was already dead                                                                                                                                 |
+| Treating an `.m3u`/`.pls` link as the stream                       | Served as `audio/x-mpegurl`, so an `audio/` test passes a text file that plays nothing                                                                                                                                                                 |
+| Copying a service's data directory to set up another one           | Its `settings.json` `server_url` beats `SERVER_URL`, so the registry sends every speaker to the old machine. `soundtouch_service.py health --service <service>` says no; see troubleshooting.md                                                        |
+| Fixing the registry without rebooting the speakers                 | Each speaker keeps the registry it read at boot, so radio and relative presets still go to the old address while every check reads ok                                                                                                                  |
+| Letting the service's address come from plain DHCP                 | Every speaker breaks at once, weeks later, when the lease changes                                                                                                                                                                                      |
+| Declaring failure 30 seconds after a reboot                        | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging                                                                                                                                                                            |

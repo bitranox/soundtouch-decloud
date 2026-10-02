@@ -8,7 +8,8 @@ Run this FIRST, and run it with plain `python3`, not `uv run`:
 
 Every other script here is documented as `uv run ...`, which cannot work when `uv` is the thing
 that is missing. A checker that needs the tool it is checking for is no checker at all, so this one
-imports nothing outside the standard library and runs on whatever Python the owner already has.
+imports nothing outside the standard library and still starts on a Python older than the 3.11 the
+other scripts need, so that it can say so.
 
 Exit 0 when everything REQUIRED is present, 1 when something required is missing, 2 on an error.
 `pytest` is reported but never required: it is for people changing the skill, not using it.
@@ -18,25 +19,51 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import platform
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from enum import StrEnum
+from enum import Enum
 
-try:
-    from soundtouch_service import install_hint
-except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
-    import pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from soundtouch_service import install_hint
+# This script must START on the old Python it exists to report, so the 3.11-only pieces are
+# gated and the runtime type aliases below are strings.
+if sys.version_info >= (3, 11):  # noqa: UP036 - this script's floor is 3.9, below the others'
+    from enum import StrEnum
+else:  # pragma: no cover - the old Python this script exists to report
+    class StrEnum(str, Enum):
+        """The members ARE their values, as enum.StrEnum makes them on 3.11."""
+
+        def __str__(self) -> str:
+            return str(self.value)
+
+
+def _upgrade_python_first(_system: str) -> str:
+    return ("Upgrade Python to 3.11 or newer first: the Docker instruction comes from a script "
+            "that needs it. Then run this check again.")
+
+
+def _service_install_hint() -> Callable[[str], str]:
+    """soundtouch_service's Docker instruction, or a stand-in on a Python too old to import it."""
+    here = str(pathlib.Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        # Local, because soundtouch_service needs Python 3.11 and this script must start without it.
+        from soundtouch_service import install_hint
+    except (ImportError, SyntaxError):
+        return _upgrade_python_first
+    return install_hint
+
+
+install_hint = _service_install_hint()
 
 MIN_PYTHON = (3, 11)
 
-WhichFn = Callable[[str], str | None]
-VersionFn = Callable[[list[str]], str]
+WhichFn = Callable[[str], "str | None"]
+VersionFn = Callable[["list[str]"], str]
 
 
 class Tool(StrEnum):
@@ -83,6 +110,21 @@ class CheckResult:
             out["install"] = self.install
         return out
 
+# What an owner answers, or os-release names, mapped to the family the hint tables are keyed by.
+# Every answer soundtouch_service's Docker table knows must appear here (a test holds the two
+# lists together), or an owner who typed it gets generic compose and Python advice.
+_FAMILY_OF: dict[str, SystemFamily] = {
+    "windows": SystemFamily.WINDOWS,
+    "macos": SystemFamily.MACOS, "mac": SystemFamily.MACOS,
+    "debian": SystemFamily.DEBIAN, "ubuntu": SystemFamily.DEBIAN,
+    "raspberry pi os": SystemFamily.DEBIAN, "raspbian": SystemFamily.DEBIAN,
+    "linux mint": SystemFamily.DEBIAN, "pop os": SystemFamily.DEBIAN,
+    "fedora": SystemFamily.FEDORA, "rhel": SystemFamily.FEDORA, "centos": SystemFamily.FEDORA,
+    "rocky": SystemFamily.FEDORA, "almalinux": SystemFamily.FEDORA,
+    "synology": SystemFamily.NAS, "qnap": SystemFamily.NAS, "nas": SystemFamily.NAS,
+    "linux": SystemFamily.LINUX,
+}
+
 _UV_POSIX = ("curl -LsSf https://astral.sh/uv/install.sh | sh    "
              "(or `brew install uv`, or `pipx install uv`), then open a new terminal")
 _UV_WINDOWS = ('powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
@@ -108,7 +150,7 @@ _PY_HINTS: dict[str, str] = {
 }
 
 __all__ = ["CheckResult", "SystemFamily", "Tool", "detect_system", "check_python", "check_uv", "check_docker", "check_compose",
-           "check_pytest", "run_checks", "build_parser", "main"]
+           "check_pytest", "system_family", "run_checks", "build_parser", "main"]
 
 
 def detect_system(system: str = "", *, release: str = "/etc/os-release") -> str:
@@ -139,11 +181,18 @@ def _linux_family(release: str = "/etc/os-release") -> str:
     ident = fields.get("ID", "").strip('"').lower()
     like = fields.get("ID_LIKE", "").strip('"').lower().split()
     for candidate in [ident, *like]:
-        if candidate in ("debian", "ubuntu", "raspbian"):
-            return SystemFamily.DEBIAN
-        if candidate in ("fedora", "rhel", "centos"):
-            return SystemFamily.FEDORA
+        if _FAMILY_OF.get(candidate) in (SystemFamily.DEBIAN, SystemFamily.FEDORA):
+            return _FAMILY_OF[candidate]
     return ident or SystemFamily.LINUX
+
+
+def system_family(system: str) -> str:
+    """The family whose hints apply to an owner's answer or a detected key ("ubuntu" -> debian).
+
+    An answer no table knows passes through unchanged and finds the generic hints.
+    """
+    key = system.strip().lower()
+    return _FAMILY_OF.get(key, key)
 
 
 def _version_of(argv: list[str]) -> str:
@@ -189,8 +238,8 @@ def check_compose(system: str, *, which: WhichFn = shutil.which,
     """The compose plugin, reported on its own line rather than folded into Docker.
 
     `docker` on PATH without `docker compose` is a real and common state, and it fails later at
-    `docker compose up`. Folding the two together got the VERDICT right and the ADVICE wrong: it
-    told somebody who had just installed Docker to install Docker. The plugin is its own package on
+    `docker compose up`. Folded into one check, the VERDICT would be right and the ADVICE wrong: it
+    would tell somebody who has just installed Docker to install Docker. The plugin is its own package on
     most Linux distributions, so it gets its own instruction.
     """
     detail = version(["docker", "compose", "version"]) if which("docker") else ""
@@ -199,7 +248,7 @@ def check_compose(system: str, *, which: WhichFn = shutil.which,
     return CheckResult(
         tool=Tool.COMPOSE, required=True, present=bool(detail), detail=detail or "not available",
         why="the service is started with `docker compose up`",
-        install=_COMPOSE_HINTS.get(system, _COMPOSE_DEFAULT))
+        install=_COMPOSE_HINTS.get(system_family(system), _COMPOSE_DEFAULT))
 
 
 def check_pytest(*, which: WhichFn = shutil.which, version: VersionFn = _version_of) -> CheckResult:
@@ -217,7 +266,7 @@ def _with_python_install(result: CheckResult, system: str) -> CheckResult:
     problem than it looks."""
     if result.tool is not Tool.PYTHON or result.present:
         return result
-    hint = _PY_HINTS.get(system, "Install Python 3.11 or newer")
+    hint = _PY_HINTS.get(system_family(system), "Install Python 3.11 or newer")
     return replace(result, install=hint + ". With uv already installed, `uv python install 3.13` does it")
 
 

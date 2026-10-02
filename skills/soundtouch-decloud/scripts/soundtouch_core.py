@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Shared logic for talking to a Bose SoundTouch speaker.
 
 Only the standard library, so these modules import in a bare environment. That is also why the
@@ -109,8 +108,8 @@ class StreamKind(StrEnum):
 URL_FIELDS = tuple(UrlField)
 CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
 RADIO_SOURCES = tuple(RadioSource)
-# The form this skill wrote before 1.8.0. Still READ, because speakers keep what was stored, and
-# some of AfterTouch's own playback paths still produce it; never written any more.
+# The legacy host-bound playback form. READ, because speakers keep what was stored and some of
+# AfterTouch's own playback paths and catalog entries produce it; never written here.
 PLAYBACK_PATH = "/custom/v1/playback/"
 # The Orion adapter, where LOCAL_INTERNET_RADIO lives on a BMX host. AfterTouch's registry advertises
 # it as that source's baseUrl, "<service>" + ORION_BASE_PATH.
@@ -503,8 +502,8 @@ def _relative_location(item: ET.Element) -> str:
 def relativize_plan(raw: str) -> list[RelativizeStep]:
     """Which buttons hold a HOST-BOUND radio location, and the storePreset body that fixes each.
 
-    Host-bound means an absolute Orion location or a legacy /custom/v1/playback one: both name the
-    service's address, so the button stops playing when the service moves. The body carries the
+    Host-bound means an absolute Orion location or a decodable legacy /custom/v1/playback one: both
+    name a host, so the button stops playing when that host moves or is gone. The body carries the
     slot's ContentItem exactly as the speaker reported it - name, art, source, type, account - with
     only the location swapped for its relative form, so the station, its picture and its button are
     what they were. Only LOCAL_INTERNET_RADIO is touched: a TuneIn or Spotify location is not an
@@ -604,6 +603,9 @@ def decode_playback_location(location: str) -> str:
         return ""
 
 
+_TO_STANDARD_BASE64 = str.maketrans("-_ ", "+/+")
+
+
 def decode_cloud_location(location: str) -> str:
     """Recover the stream URL buried in a Bose adapter location, or "" if it is not one.
 
@@ -618,8 +620,11 @@ def decode_cloud_location(location: str) -> str:
     if not blob:
         return ""
     try:
-        padded = blob + "=" * (-len(blob) % 4)
-        return str(json.loads(base64.b64decode(padded)).get("streamUrl", ""))
+        # The cloud wrote base64url, and the standard decoder silently DROPS '-' and '_'. Mapping
+        # them onto '+' and '/' reads either alphabet, since neither uses the other's two symbols.
+        # A '+' left unescaped in the query reaches here as a space (parse_qs), so it maps back.
+        padded = blob.translate(_TO_STANDARD_BASE64) + "=" * (-len(blob) % 4)
+        return str(json.loads(base64.b64decode(padded, validate=True)).get("streamUrl", ""))
     except (ValueError, UnicodeDecodeError, AttributeError):
         return ""
 

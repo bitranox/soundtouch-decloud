@@ -1,8 +1,11 @@
 """Tests for the migration verdict and the reboot proof."""
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
 import soundtouch_onboard as O
-from soundtouch_core import ServiceUrls, TelnetReply, UrlField
+from soundtouch_core import API_PORT, ServiceUrls, SpeakerError, TelnetReply, UrlField
 
 LOCAL = {UrlField.MARGE: "http://192.0.2.10:8000",
          UrlField.STATS: "http://192.0.2.10:8000",
@@ -181,3 +184,52 @@ def test_now_playing_defaults_when_the_speaker_leaves_fields_out():
     reading = O.parse_now_playing("<nowPlaying></nowPlaying>")
     assert (reading.source, reading.play_status, reading.item_name) == ("", "-", "-")
     assert not reading.is_standby and not reading.is_playing
+
+
+class _RefusingSpeaker(BaseHTTPRequestHandler):
+    """Answers reads like an awake speaker and refuses every POST, as a box mid-reboot can."""
+
+    def do_GET(self):
+        body = b'<nowPlaying deviceID="AABBCC0000A1" source="AUX"><playStatus>PLAY_STATE</playStatus></nowPlaying>'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        self.send_response(500)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+@pytest.fixture
+def refusing_speaker():
+    """A real HTTP server on the speaker API port of a spare loopback address."""
+    ip = "127.0.0.9"
+    try:
+        server = ThreadingHTTPServer((ip, API_PORT), _RefusingSpeaker)
+    except OSError as exc:
+        pytest.skip(f"cannot bind {ip}:{API_PORT}: {exc}")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield ip
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_refused_post_is_a_speaker_error(refusing_speaker):
+    with pytest.raises(SpeakerError, match="500"):
+        O._post(refusing_speaker, "key", "<key/>")
+
+
+def test_a_refused_key_press_answers_with_an_envelope_not_a_traceback(refusing_speaker, capsys,
+                                                                     monkeypatch):
+    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
+    rc = O.main(["--ip", refusing_speaker, "play", "--expect", "x", "--confirm"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["ok"] is False and out["command"] == "play"
+    assert "/key" in out["data"]["error"]

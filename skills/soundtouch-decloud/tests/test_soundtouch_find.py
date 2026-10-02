@@ -181,3 +181,23 @@ def test_speaker_state_reads_the_registry_the_speaker_itself_uses(monkeypatch):
 def test_speaker_state_with_its_own_registry_is_ready(monkeypatch):
     _fake_speaker(monkeypatch, "http://192.0.2.10:8000")
     assert F.speaker_state("192.0.2.31").verdict == F.SpeakerVerdict.READY
+
+
+def test_a_speaker_without_radio_browser_is_ready():
+    """The Wireless Link Adapter never lists RADIO_BROWSER; an unlisted source is not a loading one."""
+    assert F.classify(_state(sources={"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "READY",
+                                      "RADIO_BROWSER": "ABSENT"})) == F.SpeakerVerdict.READY
+
+
+def test_an_unreadable_info_is_not_blamed_on_the_account():
+    """The account was never read, so 'no account attached' would be a claim nothing supports."""
+    state = F.SpeakerState(ip="192.0.2.31", ports=OPEN_PORTS, info_error="timed out",
+                           sources=_sources(), preset_count=6)
+    assert F.classify(state) == F.SpeakerVerdict.INFO_UNREADABLE
+    assert json.loads(json.dumps(state.to_json()))["info_error"] == "timed out"
+
+
+def test_a_migration_fault_still_outranks_an_unreadable_info():
+    state = F.SpeakerState(ip="192.0.2.31", ports=OPEN_PORTS, info_error="timed out",
+                           urls=_urls(CLOUD), cloud_leftovers=_urls(CLOUD))
+    assert F.classify(state) == F.SpeakerVerdict.NEEDS_MIGRATION

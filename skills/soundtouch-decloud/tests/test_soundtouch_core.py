@@ -549,3 +549,26 @@ def test_a_loopback_service_address_cannot_judge_the_registry(service):
     verdict = C.registry_verdict(service, _registry())
     assert verdict.verdict == RegistryVerdict.UNJUDGED
     assert "speakers" in verdict.reason
+
+
+def test_a_speaker_that_never_lists_radio_browser_can_still_be_ready():
+    """Firmware 20 (the Wireless Link Adapter) publishes no RADIO_BROWSER at all, so a source the
+    speaker never listed cannot be a source that is still loading."""
+    assert C.parse_sources(SOURCES).radio_ready() is True
+
+
+def test_a_listed_source_that_is_still_loading_is_not_ready():
+    payload = SOURCES.replace('source="TUNEIN" status="READY"', 'source="TUNEIN" status="UNAVAILABLE"')
+    assert C.parse_sources(payload).radio_ready() is False
+
+
+def test_without_local_internet_radio_the_radio_is_not_ready():
+    """Every preset this skill writes plays through LOCAL_INTERNET_RADIO, so its absence is not
+    excused the way an unlisted optional source is."""
+    payload = SOURCES.replace('<sourceItem source="LOCAL_INTERNET_RADIO" status="READY" isLocal="false" />', "")
+    assert C.parse_sources(payload).radio_ready() is False
+
+
+def test_a_speaker_listing_no_radio_source_is_not_ready():
+    assert C.parse_sources('<sources deviceID="00005E005300"></sources>').radio_ready() is False
+    assert C.RadioSources({}).radio_ready() is False

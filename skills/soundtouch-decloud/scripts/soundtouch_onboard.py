@@ -225,9 +225,15 @@ def wait_port(ip: str, port: int, limit: float) -> float | None:
 
 
 def _post(ip: str, path: str, body: str) -> None:
-    req = urllib.request.Request(f"http://{ip}:{API_PORT}/{path}", data=body.encode(), method="POST")
-    with urllib.request.urlopen(req, timeout=15):  # noqa: S310 - fixed http URL built above
-        pass
+    """POST to the speaker; a refusal is a SpeakerError like every failed read, so `main` answers
+    it with an envelope instead of a traceback."""
+    url = f"http://{ip}:{API_PORT}/{path}"
+    req = urllib.request.Request(url, data=body.encode(), method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15):  # noqa: S310 - fixed http URL built above
+            pass
+    except OSError as exc:
+        raise SpeakerError(f"{url}: {exc}") from exc
 
 
 def _key(ip: str, name: str) -> None:
@@ -393,7 +399,8 @@ def _cmd_enable_ssh(opts: Options) -> int:
 
 
 def _wait_for_sources(ip: str, limit: float) -> RadioSources:
-    """Poll /sources until every radio source is READY or the limit passes; the last reading."""
+    """Poll /sources until internet radio is ready (see RadioSources.radio_ready) or the limit
+    passes; the last reading."""
     ready = RadioSources({})
     deadline = time.monotonic() + limit
     while time.monotonic() < deadline:
@@ -402,7 +409,7 @@ def _wait_for_sources(ip: str, limit: float) -> RadioSources:
         except SpeakerError:
             time.sleep(5)
             continue
-        if ready.all_ready():
+        if ready.radio_ready():
             break
         time.sleep(5)
     return ready
@@ -436,11 +443,11 @@ def _cmd_reboot(opts: Options) -> int:
         try:
             _post(opts.ip, "volume", f"<volume>{volume_before}</volume>")
             time.sleep(1)
-        except OSError:
+        except SpeakerError:
             pass
         volume_after = _volume(opts.ip)
     return _emit(command,
-                 bool(ready) and ready.all_ready()
+                 ready.radio_ready()
                  and (volume_before is None or volume_after == volume_before),
                  {"down_after_s": down, "up_after_s": up, "sources": ready.to_json(),
                   "volume_before": volume_before, "volume_after": volume_after})

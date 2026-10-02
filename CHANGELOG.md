@@ -7,6 +7,23 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.2] 2026-10-02
+
+### Fixed
+
+- **A speaker that never lists RADIO_BROWSER can be `ready`.** `soundtouch_find.py` read a source
+  the speaker never published as one still loading, so a Wireless Link Adapter on firmware 20,
+  which has no RADIO_BROWSER, could only ever read `sources-not-ready`, and `soundtouch_onboard.py
+  reboot` waited out its whole `--sources-wait` on it and reported a failure. Readiness is now:
+  `LOCAL_INTERNET_RADIO` is READY (every preset this skill writes plays through it) and no source
+  the speaker lists is still loading.
+- **A failed `/info` read is no longer reported as a missing account.** It has its own verdict,
+  `info-unreadable`, with advice to wait out a restart, where it used to say `needs-account`
+  without the account ever having been read.
+- **A refused key press or volume write ends with the JSON envelope.** `soundtouch_onboard.py
+  play` and `reboot` let an HTTP error from the speaker's `/key` or `/volume` POST escape as a
+  Python traceback. It is now an error envelope and exit 1, the same as a failed read.
+
 ## [1.10.1] 2026-10-02
 
 ### Changed

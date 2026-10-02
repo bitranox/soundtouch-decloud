@@ -210,9 +210,17 @@ class RadioSources:
     def is_ready(self, source: RadioSource) -> bool:
         return self.statuses.get(source) == SourceStatus.READY
 
-    def all_ready(self) -> bool:
-        """Every listed source is READY; vacuously true for an empty reading, so test bool first."""
-        return all(status == SourceStatus.READY for status in self.statuses.values())
+    def radio_ready(self) -> bool:
+        """Internet radio is usable: LOCAL_INTERNET_RADIO is READY and no source the speaker lists
+        is still loading.
+
+        A source the speaker never listed (ABSENT) is not a loading one - firmware 20, the
+        Wireless Link Adapter, publishes no RADIO_BROWSER at all - but LOCAL_INTERNET_RADIO is not
+        excused, because every preset this skill writes plays through it.
+        """
+        listed = [status for status in self.statuses.values() if status != SourceStatus.ABSENT]
+        return (self.is_ready(RadioSource.LOCAL_INTERNET_RADIO)
+                and all(status == SourceStatus.READY for status in listed))
 
     def to_json(self) -> dict[str, str]:
         return {source.value: str(status) for source, status in self.statuses.items()}

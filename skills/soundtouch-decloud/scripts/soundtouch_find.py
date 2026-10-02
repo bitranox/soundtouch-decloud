@@ -41,6 +41,7 @@ class SpeakerVerdict(StrEnum):
     NOT_ANSWERING = "not-answering"
     NEEDS_MIGRATION = "needs-migration"
     REGISTRY_FOREIGN = "registry-foreign"
+    INFO_UNREADABLE = "info-unreadable"
     NEEDS_ACCOUNT = "needs-account"
     SOURCES_NOT_READY = "sources-not-ready"
     NEEDS_PRESETS = "needs-presets"
@@ -154,9 +155,12 @@ def classify(state: SpeakerState) -> SpeakerVerdict:
     # an unreadable registry is not knowing, and DNS mode names the Bose cloud on purpose.
     if state.registry is not None and state.registry.verdict == RegistryVerdict.FOREIGN:
         return SpeakerVerdict.REGISTRY_FOREIGN
+    # A failed /info read never saw the account, so it must not be reported as a missing one.
+    if state.info_error is not None:
+        return SpeakerVerdict.INFO_UNREADABLE
     if state.info is None or not state.info.account:
         return SpeakerVerdict.NEEDS_ACCOUNT
-    if state.sources and not state.sources.all_ready():
+    if state.sources is not None and not state.sources.radio_ready():
         return SpeakerVerdict.SOURCES_NOT_READY
     if not state.preset_count:
         return SpeakerVerdict.NEEDS_PRESETS
@@ -184,6 +188,10 @@ _ADVICE: Mapping[SpeakerVerdict, str] = {
         "in the service's settings.json (or its Settings page), restart it, "
         "then restart every speaker: a speaker reads these addresses when it "
         "starts and keeps the old ones until it restarts."),
+    SpeakerVerdict.INFO_UNREADABLE: (
+        "This speaker answers on the network but would not say who it is or "
+        "which account it has. If it was just restarted, give it about 80 "
+        "seconds and look again; if it stays this way, restart it."),
     SpeakerVerdict.NEEDS_ACCOUNT: (
         "This speaker has no account attached, so it will not load any radio at "
         "all until one is bound to it."),

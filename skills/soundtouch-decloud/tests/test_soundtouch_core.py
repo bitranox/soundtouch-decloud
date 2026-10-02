@@ -426,7 +426,7 @@ def test_parse_preset_slots_skips_a_slot_with_no_location():
 class _FakeSocket:
     """A socket that hands back a fixed script of chunks, then times out.
 
-    _read_to_prompt takes the socket, so this substitutes at a real seam rather than patching the
+    read_to_prompt takes the socket, so this substitutes at a real seam rather than patching the
     module's internals.
     """
 
@@ -443,13 +443,13 @@ class _FakeSocket:
 
 
 def test_a_reply_ending_at_the_prompt_is_complete():
-    text, complete = C._read_to_prompt(_FakeSocket(b"margeServerUrl {\n", b"}\n-> "), timeout=1)
+    text, complete = C.read_to_prompt(_FakeSocket(b"margeServerUrl {\n", b"}\n-> "), timeout=1)
     assert complete is True and "margeServerUrl" in text
 
 
 def test_a_reply_that_never_reaches_the_prompt_is_marked_incomplete():
     """The text still comes back, so only the flag separates a truncated read from a finished one."""
-    text, complete = C._read_to_prompt(_FakeSocket(b"margeServerUrl {\n"), timeout=1)
+    text, complete = C.read_to_prompt(_FakeSocket(b"margeServerUrl {\n"), timeout=1)
     assert complete is False and "margeServerUrl" in text
 
 

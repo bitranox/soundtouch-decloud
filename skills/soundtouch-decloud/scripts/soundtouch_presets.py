@@ -38,14 +38,14 @@ try:
                                  RadioSource, SpeakerError, StreamKind, classify_stream,
                                  harvest_presets, http_get, orion_location, parse_presets,
                                  parse_sources, playlist_targets, relative_orion_location,
-                                 relativize_plan, slots_to_write)
+                                 json_list, json_object, relativize_plan, slots_to_write)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from soundtouch_core import (API_PORT, PLAYBACK_PATH, ContentItemType, PresetEntry,
                                  RadioSource, SpeakerError, StreamKind, classify_stream,
                                  harvest_presets, http_get, orion_location, parse_presets,
                                  parse_sources, playlist_targets, relative_orion_location,
-                                 relativize_plan, slots_to_write)
+                                 json_list, json_object, relativize_plan, slots_to_write)
 
 REQUIRED_FIELDS = ("buttonNumber", "name", "location")
 # A kept entry (an album, a library track) is not a stream, so fetching it proves nothing. It is
@@ -185,35 +185,37 @@ def _read_json(path: str) -> object:
 
 
 def _preset_list(data: object) -> list[object]:
-    presets = data.get("presets") if isinstance(data, dict) else None
-    if not isinstance(presets, list):
+    template = json_object(data)
+    presets = json_list(template.get("presets")) if template is not None else None
+    if presets is None:
         raise ValueError("template has no presets")
     return presets
 
 
 def _entry(raw: object, seen: set[int]) -> PresetEntry:
     """One template entry, validated; `seen` collects the buttons so a repeat is refused."""
+    row = json_object(raw)
     for field in REQUIRED_FIELDS:
-        if not isinstance(raw, dict) or field not in raw:
+        if row is None or field not in row:
             raise ValueError(f"preset is missing '{field}': {raw}")
-    assert isinstance(raw, dict)  # narrowed by the loop above, which raised for anything else
-    button = raw["buttonNumber"]
+    assert row is not None  # narrowed by the loop above, which raised for anything else
+    button = row["buttonNumber"]
     if not isinstance(button, int) or not 1 <= button <= 6:
         raise ValueError(f"buttonNumber must be 1..6, got {button!r}")
     if button in seen:
         raise ValueError(f"buttonNumber {button} appears twice")
     seen.add(button)
-    entry = PresetEntry(button_number=button, name=str(raw["name"]), location=str(raw["location"]),
-                        content_item_type=str(raw.get("contentItemType", ContentItemType.STATION_URL)),
-                        source=str(raw.get("source", RadioSource.LOCAL_INTERNET_RADIO)),
-                        keep=bool(raw.get("keep")))
+    entry = PresetEntry(button_number=button, name=str(row["name"]), location=str(row["location"]),
+                        content_item_type=str(row.get("contentItemType", ContentItemType.STATION_URL)),
+                        source=str(row.get("source", RadioSource.LOCAL_INTERNET_RADIO)),
+                        keep=bool(row.get("keep")))
     if entry.keep:
         return entry  # not radio: carried as stored, never written, so there is no stream to demand
     if PLAYBACK_PATH in entry.location or relative_orion_location(entry.location):
         raise ValueError("location must be the PLAIN stream URL; the wrapping is added on write")
     if not entry.location.startswith(("http://", "https://")):
         raise ValueError(
-            f"button {button} ({raw.get('name')!r}) has no stream URL yet. `harvest` leaves a "
+            f"button {button} ({row.get('name')!r}) has no stream URL yet. `harvest` leaves a "
             f"hole for every station whose stream it could not recover; find the station's "
             f"current stream, put it here, and confirm it with `validate` before writing")
     return entry
@@ -241,10 +243,11 @@ def load_partial_template(path: str) -> list[TemplateRow]:
     """
     rows: list[TemplateRow] = []
     for raw in _preset_list(_read_json(path)):
-        if not isinstance(raw, dict):
+        row = json_object(raw)
+        if row is None:
             raise ValueError(f"preset is not an object: {raw}")
-        rows.append(TemplateRow(button_number=raw.get("buttonNumber"), name=raw.get("name"),
-                                location=str(raw.get("location", "")), keep=bool(raw.get("keep"))))
+        rows.append(TemplateRow(button_number=row.get("buttonNumber"), name=row.get("name"),
+                                location=str(row.get("location", "")), keep=bool(row.get("keep"))))
     return rows
 
 

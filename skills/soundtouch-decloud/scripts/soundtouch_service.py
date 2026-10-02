@@ -20,13 +20,14 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import cast
 
 try:
     from soundtouch_core import (
         RegistryVerdict,
         SpeakerError,
         http_get,
+        json_list,
+        json_object,
         registry_verdict,
     )
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
@@ -35,6 +36,8 @@ except ModuleNotFoundError:  # pragma: no cover - direct execution from another 
         RegistryVerdict,
         SpeakerError,
         http_get,
+        json_list,
+        json_object,
         registry_verdict,
     )
 
@@ -132,10 +135,10 @@ class DeviceListing:
 
 def parse_devices(payload: object) -> DeviceListing | None:
     """The device listing in a decoded JSON payload, or None when it is not a list."""
-    if not isinstance(payload, list):
+    entries = json_list(payload)
+    if entries is None:
         return None
-    entries = cast("list[object]", payload)
-    names = tuple(cast("dict[str, object]", e).get("name") for e in entries if isinstance(e, dict))
+    names = tuple(o.get("name") for o in map(json_object, entries) if o is not None)
     return DeviceListing(count=len(entries), names=names)
 
 

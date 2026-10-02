@@ -26,6 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from typing import Protocol, cast
 
 TELNET_PORT = 17000
 API_PORT = 8090
@@ -149,7 +150,7 @@ __all__ = [
     "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
     "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
     "http_date_header", "clock_state", "CLOCK_TOLERANCE_S",
-    "SpeakerError",
+    "SpeakerError", "json_object", "json_list", "PromptSocket", "read_to_prompt",
 ]
 
 
@@ -790,7 +791,15 @@ def port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
-def _read_to_prompt(sock: socket.socket, timeout: float = 10.0) -> tuple[str, bool]:
+class PromptSocket(Protocol):
+    """The two socket calls `read_to_prompt` makes, so a scripted fake can stand in for a speaker."""
+
+    def settimeout(self, value: float | None, /) -> None: ...
+
+    def recv(self, bufsize: int, /) -> bytes: ...
+
+
+def read_to_prompt(sock: PromptSocket, timeout: float = 10.0) -> tuple[str, bool]:
     """Read until the `->` prompt. Returns the text and whether the prompt actually arrived.
 
     Waiting for OK would hang: `envswitch boseurls set` replies `Setting Bose Server URLs to ...`
@@ -821,10 +830,10 @@ def telnet_run(ip: str, commands: list[str], settle: float = 0.2) -> list[Telnet
     out: list[TelnetReply] = []
     try:
         with socket.create_connection((ip, TELNET_PORT), timeout=10) as sock:
-            _read_to_prompt(sock, timeout=6)
+            read_to_prompt(sock, timeout=6)
             for cmd in commands:
                 sock.sendall(cmd.encode() + b"\r\n")
-                reply, complete = _read_to_prompt(sock)
+                reply, complete = read_to_prompt(sock)
                 out.append(TelnetReply(cmd=cmd, reply=reply.strip(), complete=complete))
                 time.sleep(settle)
     except OSError as exc:
@@ -840,6 +849,20 @@ def http_get(url: str, timeout: float = 8.0) -> str:
             return resp.read().decode("utf-8", "replace")
     except OSError as exc:
         raise SpeakerError(f"{url}: {exc}") from exc
+
+
+def json_object(value: object) -> dict[str, object] | None:
+    """A decoded JSON object as a typed mapping, or None for anything else.
+
+    `isinstance(value, dict)` alone narrows to a dict of unknown types, which hides every later
+    misuse of its values; JSON object keys are always strings, so this is the honest type.
+    """
+    return cast("dict[str, object]", value) if isinstance(value, dict) else None
+
+
+def json_list(value: object) -> list[object] | None:
+    """A decoded JSON array as a typed list, or None for anything else."""
+    return cast("list[object]", value) if isinstance(value, list) else None
 
 
 def http_date_header(ip: str, timeout: float = 8.0) -> str | None:

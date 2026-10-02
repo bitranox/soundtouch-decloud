@@ -1,5 +1,10 @@
 """Tests for how a speaker's state is turned into one verdict and one sentence for the owner."""
 import json
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
 
 import soundtouch_find as F
 from soundtouch_core import (
@@ -218,3 +223,59 @@ def test_a_migration_fault_still_outranks_an_unreadable_info():
     state = F.SpeakerState(ip="192.0.2.31", ports=OPEN_PORTS, info_error="timed out",
                            urls=_urls(CLOUD), cloud_leftovers=_urls(CLOUD))
     assert F.classify(state) == F.SpeakerVerdict.NEEDS_MIGRATION
+
+
+# --- discovery through the service ----------------------------------------------------------
+
+
+class _DeviceList(BaseHTTPRequestHandler):
+    """The service's /api/setup/devices endpoint, answering whatever body the test sets."""
+
+    body = b"[]"
+    url = ""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def service() -> Iterator[type[_DeviceList]]:
+    """A real HTTP server standing in for the service; the test sets the handler's body."""
+    class Handler(_DeviceList):  # a fresh class per test, so one test's body never leaks
+        pass
+
+    handler = Handler
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    handler.url = f"http://127.0.0.1:{server.server_address[1]}"
+    yield handler
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_device_list_that_is_not_an_array_answers_with_an_envelope(
+        service: type[_DeviceList], capsys: pytest.CaptureFixture[str]) -> None:
+    service.body = b"42"
+    rc = F.main(["--service", service.url])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 2 and out["ok"] is False
+    assert "not a JSON array" in out["data"]["error"]
+
+
+def test_discovery_keeps_the_device_objects_and_skips_anything_else(
+        service: type[_DeviceList], capsys: pytest.CaptureFixture[str]) -> None:
+    """Entries with no address are listed but never probed, so no speaker is contacted here."""
+    service.body = json.dumps([{"name": "Kitchen", "device_id": "A0F6", "ip_address": ""},
+                               "not-an-object", 7]).encode()
+    F.main(["--service", service.url])
+    out = json.loads(capsys.readouterr().out)
+    assert out["data"]["discovered"] == [
+        {"name": "Kitchen", "device_id": "A0F6", "ip": ""}]

@@ -150,7 +150,7 @@ _PY_HINTS: dict[str, str] = {
 }
 
 __all__ = ["CheckResult", "SystemFamily", "Tool", "detect_system", "check_python", "check_uv", "check_docker", "check_compose",
-           "check_pytest", "system_family", "run_checks", "build_parser", "main"]
+           "check_pytest", "system_family", "linux_family", "run_checks", "build_parser", "main"]
 
 
 def detect_system(system: str = "", *, release: str = "/etc/os-release") -> str:
@@ -168,10 +168,10 @@ def detect_system(system: str = "", *, release: str = "/etc/os-release") -> str:
         return SystemFamily.WINDOWS
     if name == "darwin":
         return SystemFamily.MACOS
-    return _linux_family(release)
+    return linux_family(release)
 
 
-def _linux_family(release: str = "/etc/os-release") -> str:
+def linux_family(release: str = "/etc/os-release") -> str:
     """Which family of Linux, read from os-release rather than guessed from the kernel."""
     try:
         with open(release, encoding="utf-8") as handle:

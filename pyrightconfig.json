@@ -1,0 +1,11 @@
+{
+  "include": [
+    "scripts",
+    "skills/soundtouch-decloud/scripts",
+    "skills/soundtouch-decloud/tests"
+  ],
+  "exclude": ["**/__pycache__", "**/.venv"],
+  "extraPaths": ["scripts", "skills/soundtouch-decloud/scripts"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict"
+}

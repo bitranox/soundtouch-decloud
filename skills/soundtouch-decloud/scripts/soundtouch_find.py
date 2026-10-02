@@ -24,14 +24,14 @@ try:
                                  RadioSources, RegistryCheck, RegistryVerdict, ServiceUrls,
                                  SpeakerError, UrlField, clock_state, http_date_header, http_get,
                                  parse_presets, parse_sources, parse_urls, port_open,
-                                 registry_verdict, telnet_run)
+                                 json_list, json_object, registry_verdict, telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
     from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, ClockState, ClockVerdict,
                                  RadioSources, RegistryCheck, RegistryVerdict, ServiceUrls,
                                  SpeakerError, UrlField, clock_state, http_date_header, http_get,
                                  parse_presets, parse_sources, parse_urls, port_open,
-                                 registry_verdict, telnet_run)
+                                 json_list, json_object, registry_verdict, telnet_run)
 
 __all__ = ["DeviceInfo", "DiscoveredDevice", "SpeakerState", "SpeakerVerdict", "build_parser",
            "classify", "describe_state", "parse_info", "speaker_state", "main"]
@@ -298,9 +298,13 @@ def _discover(service: str) -> list[DiscoveredDevice]:
         found = json.loads(body)
     except json.JSONDecodeError as exc:
         raise SpeakerError("the service answered but not with JSON") from exc
+    entries = json_list(found)
+    if entries is None:
+        raise SpeakerError("the service's device list is not a JSON array")
+    objects = (o for o in map(json_object, entries) if o is not None)
     return [DiscoveredDevice(name=_text(d.get("name")), device_id=_text(d.get("device_id")),
                              ip_address=_text(d.get("ip_address")))
-            for d in found if isinstance(d, dict)]
+            for d in objects]
 
 
 def _text(value: object) -> str | None:

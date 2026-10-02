@@ -41,11 +41,11 @@ def test_an_explicit_system_wins_over_detection():
 def test_the_linux_family_is_read_from_os_release(tmp_path, content, expected):
     path = tmp_path / "os-release"
     path.write_text(content, encoding="utf-8")
-    assert P._linux_family(str(path)) == expected
+    assert P.linux_family(str(path)) == expected
 
 
 def test_a_missing_os_release_is_not_a_crash(tmp_path):
-    assert P._linux_family(str(tmp_path / "nope")) == "linux"
+    assert P.linux_family(str(tmp_path / "nope")) == "linux"
 
 
 # --- the individual checks ------------------------------------------------------------------

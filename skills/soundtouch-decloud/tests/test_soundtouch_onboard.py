@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import soundtouch_onboard as O
-from soundtouch_core import API_PORT, ServiceUrls, SpeakerError, TelnetReply, UrlField
+from soundtouch_core import API_PORT, ServiceUrls, TelnetReply, UrlField
 
 LOCAL = {UrlField.MARGE: "http://192.0.2.10:8000",
          UrlField.STATS: "http://192.0.2.10:8000",
@@ -220,11 +220,6 @@ def refusing_speaker():
     server.server_close()
 
 
-def test_a_refused_post_is_a_speaker_error(refusing_speaker):
-    with pytest.raises(SpeakerError, match="500"):
-        O._post(refusing_speaker, "key", "<key/>")
-
-
 def test_a_refused_key_press_answers_with_an_envelope_not_a_traceback(refusing_speaker, capsys,
                                                                      monkeypatch):
     monkeypatch.setattr(O.time, "sleep", lambda _s: None)
@@ -232,4 +227,5 @@ def test_a_refused_key_press_answers_with_an_envelope_not_a_traceback(refusing_s
     out = json.loads(capsys.readouterr().out)
     assert rc == 2
     assert out["ok"] is False and out["command"] == "play"
-    assert "/key" in out["data"]["error"]
+    # The refusal reaches the owner as the speaker's own answer, not as a generic failure.
+    assert "/key" in out["data"]["error"] and "500" in out["data"]["error"]

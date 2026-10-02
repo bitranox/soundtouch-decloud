@@ -182,7 +182,7 @@ pyright
 they describe, the skill's frontmatter is the shape the router needs, every shipped script is
 named by a test, and nothing arrived with CRLF or a typographic character (em-dash, curly quote,
 ellipsis, non-breaking space, BOM). CI runs the tests on Linux, Windows and macOS, and the
-conventions gate on Linux.
+conventions gate and the strict type check on Linux.
 
 ## Changelog
 

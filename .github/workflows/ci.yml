@@ -43,6 +43,21 @@ jobs:
       - name: Run the tests
         run: python -m pytest -q
 
+  types:
+    name: types (pyright strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # pytest is installed so pyright can resolve the fixtures' types in the tests; the scripts
+      # themselves still import nothing outside the standard library.
+      - name: Install pytest and pyright
+        run: python -m pip install --upgrade pip pytest pyright
+      - name: Type-check the scripts and their tests
+        run: pyright
+
   gate:
     name: gate (conventions)
     runs-on: ubuntu-latest

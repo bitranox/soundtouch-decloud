@@ -12,7 +12,8 @@ This repo is the skill's only home, so this file is the only version history it 
 ### Added
 
 - **`pyrightconfig.json`** checks the scripts, the skill's tests and `scripts/check_repo.py` in
-  pyright's strict mode, and all of them pass it; the README names the command. Decoded JSON is
+  pyright's strict mode, and all of them pass it; CI runs it and the README names the command.
+  Decoded JSON is
   narrowed with the new `json_object` and `json_list` in `soundtouch_core` rather than a bare
   `isinstance`, which strict mode reads as a dict of unknown types.
 

@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import base64
 import html
+import http.client
 import ipaddress
 import json
 import socket
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -877,7 +879,13 @@ def http_date_header(ip: str, timeout: float = 8.0) -> str | None:
         with urllib.request.urlopen(f"http://{ip}:{API_PORT}/info",  # noqa: S310 - literal scheme
                                     timeout=timeout) as resp:
             return resp.headers.get("Date")
-    except (OSError, ValueError):
+    except urllib.error.HTTPError as exc:
+        # An error status still came from the box's own server, stamped with its clock - and a
+        # wedged speaker is exactly the one that answers 500.
+        with exc:
+            return exc.headers.get("Date")
+    except (OSError, ValueError, http.client.HTTPException):
+        # HTTPException covers a reply http.client cannot parse, which is not an OSError.
         return None
 
 

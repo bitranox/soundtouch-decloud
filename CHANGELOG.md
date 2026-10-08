@@ -7,6 +7,19 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.5] 2026-10-08
+
+### Fixed
+
+- **A speaker that answers `/info` with an error status still has its clock read.** The Date
+  header of a 500 reply carries the box's clock like any other, and a wedged speaker is the one
+  most likely to send it; `soundtouch_core.http_date_header` used to discard it and report no
+  reading.
+- **A reply `http.client` cannot parse no longer stops the survey with a traceback.**
+  `http_date_header` now returns no reading for it, as its docstring always promised; the
+  exception (`BadStatusLine` and its kin) is not an `OSError`, so the old guard let it through.
+  Both cases are tested against a real TCP server on the speaker port.
+
 ## [1.10.4] 2026-10-02
 
 ### Added

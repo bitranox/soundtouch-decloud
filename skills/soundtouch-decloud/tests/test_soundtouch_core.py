@@ -4,8 +4,11 @@ Every case here is a real reading that a plausible implementation gets wrong, so
 written against the payload shape the speaker actually returns rather than a tidied-up sample.
 """
 import base64
+import contextlib
 import json
-from collections.abc import Callable
+import socket
+import threading
+from collections.abc import Callable, Iterator
 
 import pytest
 import soundtouch_core as C
@@ -547,6 +550,62 @@ def test_no_header_or_an_unreadable_one_reads_unknown():
         state = C.clock_state(header, now=NOW)
         assert state.verdict == ClockVerdict.UNKNOWN
         assert state.reading is None
+
+
+def _canned_speaker(reply: bytes) -> Iterator[str]:
+    """A raw TCP server on the speaker API port of a spare loopback address, answering `reply`.
+
+    Raw rather than http.server, because one case is a status line no HTTP server would send.
+    """
+    ip = "127.0.0.10"
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind((ip, C.API_PORT))
+    except OSError as exc:
+        listener.close()
+        pytest.skip(f"cannot bind {ip}:{C.API_PORT}: {exc}")
+    listener.listen(4)
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            while True:
+                conn, _ = listener.accept()
+                with conn:
+                    conn.recv(4096)
+                    conn.sendall(reply)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    yield ip
+    # close() alone leaves the thread parked in accept() and the port bound, so the next case
+    # cannot bind it; shutdown() wakes the accept.
+    with contextlib.suppress(OSError):
+        listener.shutdown(socket.SHUT_RDWR)
+    listener.close()
+    thread.join(timeout=3.0)
+
+
+@pytest.fixture
+def speaker_answering_500() -> Iterator[str]:
+    yield from _canned_speaker(b"HTTP/1.1 500 Internal Server Error\r\nDate: " + HEADER_2015.encode()
+                               + b"\r\nContent-Length: 0\r\n\r\n")
+
+
+@pytest.fixture
+def speaker_answering_garbage() -> Iterator[str]:
+    yield from _canned_speaker(b"XYZZY not a status line\r\n\r\n")
+
+
+def test_an_error_response_still_carries_the_clock(speaker_answering_500: str) -> None:
+    """A wedged speaker can answer 500, and its server stamps that response with its clock too."""
+    assert C.http_date_header(speaker_answering_500, timeout=3.0) == HEADER_2015
+
+
+def test_a_malformed_reply_is_no_reading_rather_than_a_traceback(
+        speaker_answering_garbage: str) -> None:
+    """http.client refuses a bad status line with an exception that is not an OSError."""
+    assert C.http_date_header(speaker_answering_garbage, timeout=3.0) is None
 
 
 @pytest.mark.parametrize("service", ["http://127.0.0.1:8000", "http://localhost:8000",

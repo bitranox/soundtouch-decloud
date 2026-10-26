@@ -7,6 +7,16 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.10.6] 2026-10-26
+
+### Changed
+
+- **A standby speaker that stops answering is told apart from a sleeping one first.** The
+  troubleshooting reference now has a section for it: a sleeping radio answers every ping late,
+  a wedged one loses nearly all of them while its `tx failed` counter climbs. Reboot only a wedged
+  radio, over the diagnostic port, confirm the reboot by uptime where SSH is open, and keep
+  watching, because a reboot clears the symptom and does not fix the cause.
+
 ## [1.10.5] 2026-10-08
 
 ### Fixed

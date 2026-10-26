@@ -9,6 +9,7 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 |------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Service starts, finds no speakers at all                               | Bridge networking. Discovery is multicast; use host networking, or on Docker Desktop `render --network ports` and add each speaker by IP                                                                                                                                          |
 | One speaker missing, others found                                      | Asleep, on a guest network, or on a different subnet                                                                                                                                                                                                                              |
+| Speaker in STANDBY stops answering ping and :8090                      | Asleep in Wi-Fi power save, or a wedged radio. Ping it beside a standby neighbour for 60 s before acting; see below                                                                                                                                                               |
 | `/sources` lists no radio source                                       | `bmxRegistryUrl` still points at the dead cloud                                                                                                                                                                                                                                   |
 | All four URLs local, still no radio source                             | No account bound; `soundtouch_find.py` says `needs-account` (see migration.md for firmware that reports a paired speaker as unbound)                                                                                                                                              |
 | `soundtouch_find.py` says `unreadable`                                 | The speaker answers on 8090 but a read of its `/info`, `/sources` or `/presets` failed, usually because it is still booting; the envelope's `*_error` field says which. Wait 90 seconds and run it again; if it stays, `soundtouch_onboard.py --ip <speaker-ip> reboot --confirm` |
@@ -22,6 +23,40 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 | Speaker plays but ignores presets, source reads LOCAL                  | A Lifestyle console sitting on its own input, not SoundTouch                                                                                                                                                                                                                      |
 | Everything else checks out, plays nothing, service sees NO request     | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below                                                                                                                                                                                                  |
 | Plain-HTTP stations play, every HTTPS one dies at BUFFERING            | The speaker's clock. No RTC battery, so a power cut resets it to 2015 and TLS fails. `soundtouch_find.py` reports this as `clock-wrong`, read from the speaker's own Date header and so also on a box with no shell; see access-and-rooting.md                                    |
+
+## A standby speaker stops answering: asleep or a wedged radio
+
+A speaker whose `/now_playing` source reads `STANDBY` and stops answering looks asleep, and asleep
+means leave it alone. Tell the two cases apart with a control before acting: from a host on the
+same LAN, ping the suspect and a neighbour that is also in standby on the same Wi-Fi side by side
+for 60 seconds.
+
+- **Asleep:** every ping is answered, only late (Wi-Fi power save, a few ms up to a few hundred),
+  and `:8090` still answers promptly. Leave it.
+- **Wedged radio:** nearly every ping and API call is lost (observed: 1 of 60 pings answered,
+  against 60 of 60 for the neighbour) while the speaker's `tx failed` counter keeps climbing. A
+  sleeping radio does not transmit, so a climbing counter means it is awake and its frames go
+  unacknowledged. Read the counter over SSH (see access-and-rooting.md) whenever a request gets
+  through, with `iw dev wlan0 station dump` (the `tx failed:` line), several times across the
+  episode. With SSH closed neither the counter nor the uptime can be read: the ping test alone
+  then only says the suspect is unreachable while its neighbour is not, and pings coming back
+  after a `sys reboot` are the only signal left, so read them as consistent with a wedged radio
+  (or with an episode that ended by itself), not as proof.
+
+Reboot only once that test says wedged radio. Send a warm reboot over the diagnostic port and
+retry it about every 20 seconds until one gets through:
+
+```bash
+printf 'sys reboot\r\n' | nc <speaker-ip> 17000
+```
+
+A warm reboot keeps the clock. Where SSH is open, confirm it happened by the speaker's uptime
+(`cat /proc/uptime` over SSH, see access-and-rooting.md), not by pings coming back, and then keep
+sampling pings and `tx failed` for at least an hour: the state can rebuild within minutes to hours,
+and a recurrence means the reboot cleared a symptom and is not a fix, so do not automate it. A
+reboot also cannot tell a fault in the speaker from interference at its spot, because both come
+back after a reset; only moving the box separates them. This rests on a single site, and episodes
+there also ended by themselves after several hours.
 
 ## The registry names another host
 

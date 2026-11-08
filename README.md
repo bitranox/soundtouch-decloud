@@ -78,6 +78,7 @@ explicit `--confirm`, so the read half is always safe to run.
 |---------------------------|--------------------------------------------------------------------------------------------------------------------|
 | `soundtouch_preflight.py` | Report which prerequisites are installed and how to install the rest (run with `python3`)                          |
 | `soundtouch_service.py`   | Check Docker, write the compose file, check the service answers and its registry names this address                |
+| `soundtouch_dhcp.py`      | Ask the router's DHCP server whether a fixed address lies outside its range and is free (Linux, as root)           |
 | `soundtouch_find.py`      | Discover speakers on the network and give each one a verdict on what to do next                                    |
 | `soundtouch_onboard.py`   | Report migration state, open SSH over the diagnostic port, rewrite the service URLs, reboot, prove a preset played |
 | `soundtouch_presets.py`   | Back up, harvest, validate, check, restore and relativize presets                                                  |
@@ -194,7 +195,7 @@ Every release is described in [CHANGELOG.md](CHANGELOG.md).
 skills/soundtouch-decloud/
   SKILL.md          the index and the walkthrough
   references/       service setup, access and rooting, migration, presets, troubleshooting
-  scripts/          the five tools plus their shared core
+  scripts/          the six tools plus their shared core
   tests/            their tests
 scripts/check_repo.py   the repo conventions gate
 scripts/tests/          its tests

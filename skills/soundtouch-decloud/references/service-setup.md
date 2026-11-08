@@ -27,6 +27,32 @@ ifconfig           # macOS
 
 If they cannot find it, the router's client list shows the same MAC beside the machine's name.
 
+### A static address must lie outside the router's DHCP range
+
+A reservation is safe wherever it sits. A STATIC address is not: one inside the range the router
+hands out works for weeks, until the router gives the same address to a phone or a TV, and then
+the service and every speaker that points at it break together. So before setting a static
+address, find the range. The router's DHCP page states it (start and end address, or start and a
+count).
+
+When there is no router login, or a wrong password would lock the admin page (some consumer
+routers lock it for hours after two failed attempts), ask the router's DHCP server itself. From a
+Linux machine on the speakers' network, as root:
+
+```bash
+sudo python3 scripts/soundtouch_dhcp.py probe --address 192.0.2.10 --dev eth0
+```
+
+`--dev` is that machine's network interface (`ip addr` lists them; on a Proxmox host it is the
+bridge, such as `vmbr0`). It asks the DHCP server about the two addresses next to the one you
+want, as a new client would, and never completes a lease. `outside` (exit 0) means the address is
+outside the range and nothing answers on it. Exit 1 means pick another, and the envelope's
+`advice` says why: `inside` (the router can hand it out), `in-use` (something answers on it, which
+is expected when the service machine already holds it), or `other-subnet` (it is not on the
+network the router serves at all, named in the envelope's `network`). `no-answer` (exit 2) means
+no DHCP server replied on that interface. It runs on Linux only and needs root; without either,
+read the range from the router.
+
 ## Phase 3: Docker
 
 Docker is the easiest route, not the only one. AfterTouch also ships pre-built binaries, installs

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import soundtouch_dhcp as D
 import soundtouch_find as F
 import soundtouch_onboard as O
 import soundtouch_presets as P
@@ -22,7 +23,7 @@ import soundtouch_service as S
 from soundtouch_core import TelnetReply, json_object
 
 SCRIPTS = {"soundtouch_find.py": F, "soundtouch_service.py": S,
-           "soundtouch_presets.py": P, "soundtouch_onboard.py": O}
+           "soundtouch_presets.py": P, "soundtouch_onboard.py": O, "soundtouch_dhcp.py": D}
 REFERENCES = Path(__file__).resolve().parent.parent / "references"
 
 

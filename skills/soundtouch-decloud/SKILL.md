@@ -101,20 +101,22 @@ Use the Read tool to load the file for the phase you are in. Do not answer from 
 
 ## Scripts
 
-Run with `uv run scripts/<name>.py`, with ONE exception: `soundtouch_preflight.py` is run as
+Run with `uv run scripts/<name>.py`, with two exceptions. `soundtouch_preflight.py` is run as
 `python3 scripts/soundtouch_preflight.py`, because `uv` is one of the things it checks for and a
-checker that needs the missing tool is no checker at all.
+checker that needs the missing tool is no checker at all. `soundtouch_dhcp.py` is run as
+`sudo python3 scripts/soundtouch_dhcp.py`, because it needs root and root's PATH often has no `uv`.
 
 Each prints a JSON envelope; exit 0 yes, 1 no, 2 error. Anything that CHANGES a speaker requires
 `--confirm`, so the read half is always safe to run.
 
-| Script                    | Use it to                                                                                                                                           |
-|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                        |
-| `soundtouch_service.py`   | Check Docker, write the compose file (refusing an address the speakers cannot reach), check the service answers and its registry names this address |
-| `soundtouch_find.py`      | Discover speakers and give each one a verdict; the verdict words and their order are in its `--help`                                                |
-| `soundtouch_onboard.py`   | Report migration state, open SSH, migrate the URLs, reboot and wait for the radio sources, prove a preset really played                             |
-| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert host-bound presets to the relative form   |
+| Script                    | Use it to                                                                                                                                                                           |
+|---------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `soundtouch_preflight.py` | Report which prerequisites are installed, and how to install the rest. Run it with `python3`                                                                                        |
+| `soundtouch_service.py`   | Check Docker, write the compose file (refusing an address the speakers cannot reach), check the service answers and its registry names this address                                 |
+| `soundtouch_dhcp.py`      | Before giving the service machine a STATIC address: ask the router's DHCP server whether that address lies outside its range and is free, with no router login. Linux only, as root |
+| `soundtouch_find.py`      | Discover speakers and give each one a verdict; the verdict words and their order are in its `--help`                                                                                |
+| `soundtouch_onboard.py`   | Report migration state, open SSH, migrate the URLs, reboot and wait for the radio sources, prove a preset really played                                                             |
+| `soundtouch_presets.py`   | Back up, harvest a template from an old backup, validate every stream, restore and check presets, convert host-bound presets to the relative form                                   |
 
 ## When it does not work
 

@@ -7,6 +7,36 @@ This repo is the skill's only home, so this file is the only version history it 
 
 ## [Unreleased]
 
+## [1.11.0] 2026-11-08
+
+### Added
+
+- **`soundtouch_dhcp.py` checks a static address before the service machine takes it.** Run as
+  `sudo python3 scripts/soundtouch_dhcp.py probe --address <address> --dev <interface>` on a
+  Linux machine on the speakers' network, it asks the router's DHCP server about the two addresses
+  next to the wanted one, never completing a lease, and checks whether anything already answers on
+  it. It needs no router login, so it also works where a wrong password would lock the router's
+  admin page. Verdicts: `outside` (exit 0), `inside`, `in-use` or `other-subnet` (exit 1), and
+  `no-answer` (exit 2).
+
+### Fixed
+
+- **`soundtouch_find.py` no longer calls the firmware-20 Wireless Link Adapter `needs-account`.**
+  That firmware leaves the account field in `/info` empty while the speaker is bound and its radio
+  reads READY. An empty account with `LOCAL_INTERNET_RADIO` READY now goes on to the later checks,
+  and the JSON says so in `account_inferred`.
+- **`soundtouch_onboard.py play` reads a speaker stuck in setup instead of calling it silent.** Such
+  a speaker answers `/now_playing` with HTTP status 500 and a body naming `EVENT_IN_WRONG_STATE`.
+  The body is now read: `play` exits 1 with `stuck_in_setup` and the POWER key press that clears it,
+  where it used to exit 2 as though nothing had answered.
+
+### Changed
+
+- **References:** the static-ARP trap that cuts a speaker off beyond its own subnet
+  (troubleshooting.md), the fields of the service's device list and what `/api/mgmt/` is
+  (migration.md), and why a static address must lie outside the router's DHCP range
+  (service-setup.md).
+
 ## [1.10.6] 2026-10-26
 
 ### Changed

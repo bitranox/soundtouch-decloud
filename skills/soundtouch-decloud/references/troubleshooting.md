@@ -22,6 +22,7 @@ speaker's URLs still point at the dead cloud, which is the most common cause by 
 | SSH worked, gone after a reboot                                        | The flash marker was never written                                                                                                                                                                                                                                                |
 | Speaker plays but ignores presets, source reads LOCAL                  | A Lifestyle console sitting on its own input, not SoundTouch                                                                                                                                                                                                                      |
 | Everything else checks out, plays nothing, service sees NO request     | Stuck in setup. `/now_playing` says `SETUP` or `EVENT_IN_WRONG_STATE`; see below                                                                                                                                                                                                  |
+| Answers at once from its own subnet, no DNS and no stream beyond it    | The router pinned a static ARP entry to the speaker's other interface; see below                                                                                                                                                                                                  |
 | Plain-HTTP stations play, every HTTPS one dies at BUFFERING            | The speaker's clock. No RTC battery, so a power cut resets it to 2015 and TLS fails. `soundtouch_find.py` reports this as `clock-wrong`, read from the speaker's own Date header and so also on a box with no shell; see access-and-rooting.md                                    |
 
 ## A standby speaker stops answering: asleep or a wedged radio
@@ -149,6 +150,29 @@ a power blip explains it, and do not expect a migration to be involved.
 first move: they cost the 55-to-92-second readiness window for something a key press fixes in a
 second, and they put the presets through a boot for no reason. Reach for a restart only if the key
 press does not take.
+
+## Reachable next door, dead beyond the router
+
+A speaker that answers at once from a machine on its own subnet, but resolves no name and plays no
+stream, can be cut off by the router's ARP table rather than by anything on the speaker. A
+SoundTouch has two MAC addresses, one wired and one wireless. Reserving one address for both gives
+the router two DHCP reservations for it, and some routers (pfSense among them) keep a PERMANENT ARP
+entry for a reservation when its "ARP Table Static Entry" option is ticked. If that entry names the
+interface the speaker is not using, machines on the same subnet still reach it, because they look
+up its MAC themselves, while everything the router forwards to it goes to the dead interface.
+
+The device ID does not settle which MAC is the right one: it is the WIRED MAC, and a speaker on
+Wi-Fi answers from the other.
+
+On the router (a pfSense shell, or Diagnostics > ARP Table):
+
+```bash
+arp -an | grep 192.0.2.30     # "permanent" is a pinned entry; a learned one shows "expires in"
+```
+
+Untick "ARP Table Static Entry" on every reservation of that speaker, both MACs, and apply. Then
+remove the stale entry with `arp -d 192.0.2.30` and check that `arp -an` shows it with `expires
+in`, not `permanent`. Keep the reservations themselves: they are what keeps the address fixed.
 
 ## One question per command
 

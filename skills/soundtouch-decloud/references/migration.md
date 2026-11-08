@@ -147,6 +147,23 @@ curl -s "http://<service-host>:8000/api/setup/devices"      # what the service k
 uv run scripts/soundtouch_find.py --ip <speaker-ip>          # or ask the speaker
 ```
 
+Each entry in the device list carries `device_id`, `name`, `ip_address`, `mac_address`,
+`product_code`, `firmware_version`, `device_serial_number`, `product_serial_number`,
+`discovery_method`, `account_id` and a `components` list (type, category, firmware version and
+serial number of each board). Two of them need care:
+
+- `product_code` does not tell the models apart: it reads `SoundTouch` for a SoundTouch 20 and for
+  the Wireless Link Adapter alike. Take the model from the speaker's own `/info` `<type>`.
+- `account_id` reads `default` for a device the service has not bound to an account. The
+  Wireless Link Adapter on firmware 20 stays at `default` while its radio sources read READY
+  (upstream issue #780), the same speaker whose `/info` names no account (see above).
+
+The service also has a Management API under `/api/mgmt/`, for linking Spotify and Amazon accounts
+and for local accounts. It sits behind HTTP Basic Auth with `MGMT_USERNAME` and `MGMT_PASSWORD`
+(`render --mgmt-password` sets the password), and nothing in this walkthrough needs it. A real path
+there answers 401 without the credentials and a guessed one 404; neither means the service is
+broken.
+
 ```bash
 curl -s  "http://<service-host>:8000/api/setup/account-id-suggestions/<deviceId>"
 curl -X POST "http://<service-host>:8000/api/setup/pair-account/<deviceId>?account_id=<account-id>"

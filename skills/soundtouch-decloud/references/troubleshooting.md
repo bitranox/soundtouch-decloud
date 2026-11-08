@@ -117,6 +117,12 @@ curl -s http://<speaker-ip>:8090/now_playing
 Both mean the same thing, and neither is a normal idle state. `STANDBY` is what a healthy sleeping
 speaker returns.
 
+The speaker sends that error document with HTTP status 500 (observed on six readings in a row from a
+stuck speaker, while a healthy one answered 200). `curl -s` prints it anyway, but a script that
+treats an error status as "no answer" throws the diagnosis away and reports a speaker that did
+answer as unreachable. Read the body. `soundtouch_onboard.py` does, and its `play` reports
+`stuck_in_setup` instead of a timeout.
+
 **The tell that separates this from every row above: the speaker issues NO request at all.** A
 preset press leaves nothing in the service's interaction record, because the speaker never gets as
 far as asking. Inspecting the service therefore finds nothing wrong, correctly, and that clean bill

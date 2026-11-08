@@ -24,11 +24,13 @@ from typing import assert_never
 try:
     from soundtouch_core import (API_PORT, SSH_PORT, RadioSources, ServiceUrls, SpeakerError,
                                  build_enable_ssh_commands, build_url_commands, http_get,
+                                 http_get_any_status,
                                  parse_sources, parse_urls, port_open, telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
     from soundtouch_core import (API_PORT, SSH_PORT, RadioSources, ServiceUrls, SpeakerError,
                                  build_enable_ssh_commands, build_url_commands, http_get,
+                                 http_get_any_status,
                                  parse_sources, parse_urls, port_open, telnet_run)
 
 __all__ = ["Command", "MigrationVerdict", "NowPlaying", "build_parser", "migration_verdict",
@@ -56,6 +58,16 @@ class NowPlayingSource(StrEnum):
     """The now_playing source word this script acts on; every other source is firmware text."""
 
     STANDBY = "STANDBY"
+    SETUP = "SETUP"
+
+
+# The other shape of "stuck in setup": once a key has been pressed, /now_playing answers this error
+# document (with status 500) instead of a SETUP source. Matched on the attribute, not on the text.
+SETUP_ERROR = 'name="EVENT_IN_WRONG_STATE"'
+
+STUCK_NOTE = ("The speaker is stuck in setup and refuses every source: /now_playing answers "
+              "EVENT_IN_WRONG_STATE or source SETUP. Clear it with a POWER key press over HTTP and "
+              "try again; see troubleshooting.md, 'It answers, and refuses every source'.")
 
 
 class PlayStatus(StrEnum):
@@ -93,10 +105,15 @@ class NowPlaying:
     source: str
     play_status: str
     item_name: str
+    setup_error: bool = False
 
     @property
     def is_standby(self) -> bool:
         return self.source == NowPlayingSource.STANDBY
+
+    @property
+    def is_stuck_in_setup(self) -> bool:
+        return self.setup_error or self.source == NowPlayingSource.SETUP
 
     @property
     def is_playing(self) -> bool:
@@ -172,7 +189,8 @@ def parse_now_playing(raw: str) -> NowPlaying:
         play_status=(raw.split("<playStatus>", 1)[1].split("</", 1)[0]
                      if "<playStatus>" in raw else "-"),
         item_name=(raw.split("<itemName>", 1)[1].split("</", 1)[0]
-                   if "<itemName>" in raw else "-"))
+                   if "<itemName>" in raw else "-"),
+        setup_error=SETUP_ERROR in raw)
 
 
 def account_uuid(ip: str) -> str:
@@ -241,7 +259,8 @@ def _key(ip: str, name: str) -> None:
 
 
 def _read_now_playing(ip: str) -> NowPlaying:
-    return parse_now_playing(http_get(f"http://{ip}:{API_PORT}/now_playing"))
+    # Status-blind on purpose: a speaker stuck in setup sends its diagnosis with status 500.
+    return parse_now_playing(http_get_any_status(f"http://{ip}:{API_PORT}/now_playing"))
 
 
 def _volume(ip: str) -> int | None:
@@ -457,8 +476,33 @@ def _cmd_play(opts: Options) -> int:
         return _emit(command, False, {"note": f"re-run with --confirm; this presses {preset_key(opts.preset)}"
                                                " and starts audio at the speaker's current volume. "
                                                "Turn the volume down first."})
+    # Checked before anything is pressed: a key press cannot play on a speaker stuck in setup, and
+    # the run would otherwise end as a plain timeout that names nothing.
+    if _read_now_playing(opts.ip).is_stuck_in_setup:
+        return _emit_stuck(opts, PlayWatch(states=(), item="-", stuck=True))
     _wake(opts.ip)
     _key(opts.ip, preset_key(opts.preset))
+    watch = _watch_play(opts)
+    if watch.stuck:
+        return _emit_stuck(opts, watch)
+    ok = (bool(watch.states) and watch.states[-1].endswith(PlayStatus.PLAY_STATE)
+          and opts.expect.lower() in watch.item.lower())
+    return _emit(command, ok, {"preset": opts.preset, "expect": opts.expect,
+                               "itemName": watch.item, "states": list(watch.states)})
+
+
+@dataclass(frozen=True)
+class PlayWatch:
+    """What the speaker reported after the preset press, in order of first appearance."""
+
+    states: tuple[str, ...]
+    item: str
+    stuck: bool
+
+
+def _watch_play(opts: Options) -> PlayWatch:
+    """Poll /now_playing until the expected station plays, the speaker shows it is stuck in setup,
+    or the wait runs out."""
     states: list[str] = []
     item = "-"
     deadline = time.monotonic() + opts.wait
@@ -468,6 +512,8 @@ def _cmd_play(opts: Options) -> int:
         except SpeakerError:
             time.sleep(2)
             continue
+        if reading.is_stuck_in_setup:
+            return PlayWatch(tuple(states), item, stuck=True)
         item = reading.item_name
         step = f"{item}/{reading.play_status}"
         if not states or states[-1] != step:
@@ -475,10 +521,14 @@ def _cmd_play(opts: Options) -> int:
         if reading.is_playing and opts.expect.lower() in item.lower():
             break
         time.sleep(2)
-    ok = (bool(states) and states[-1].endswith(PlayStatus.PLAY_STATE)
-          and opts.expect.lower() in item.lower())
-    return _emit(command, ok, {"preset": opts.preset, "expect": opts.expect, "itemName": item,
-                               "states": states})
+    return PlayWatch(tuple(states), item, stuck=False)
+
+
+def _emit_stuck(opts: Options, watch: PlayWatch) -> int:
+    """A definite no: the speaker answered, and its answer is that it cannot play anything."""
+    return _emit(opts.command, False, {"preset": opts.preset, "expect": opts.expect,
+                                       "itemName": watch.item, "states": list(watch.states),
+                                       "stuck_in_setup": True, "note": STUCK_NOTE})
 
 
 def main(argv: list[str] | None = None) -> int:

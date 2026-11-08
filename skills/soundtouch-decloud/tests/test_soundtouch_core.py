@@ -602,6 +602,45 @@ def test_an_error_response_still_carries_the_clock(speaker_answering_500: str) -
     assert C.http_date_header(speaker_answering_500, timeout=3.0) == HEADER_2015
 
 
+SETUP_ERROR_BODY = (b'<?xml version="1.0" encoding="UTF-8" ?><error value="1043" '
+                    b'name="EVENT_IN_WRONG_STATE">NowPlaying not supported in current state: '
+                    b"Inactive</error>")
+
+
+@pytest.fixture
+def speaker_stuck_in_setup() -> Iterator[str]:
+    """What a speaker stuck in setup sends for /now_playing: status 500 WITH the diagnosis."""
+    yield from _canned_speaker(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: "
+                               + str(len(SETUP_ERROR_BODY)).encode() + b"\r\n\r\n"
+                               + SETUP_ERROR_BODY)
+
+
+def test_the_body_of_an_error_status_is_kept(speaker_stuck_in_setup: str) -> None:
+    body = C.http_get_any_status(f"http://{speaker_stuck_in_setup}:{C.API_PORT}/now_playing",
+                                 timeout=3.0)
+    assert 'name="EVENT_IN_WRONG_STATE"' in body
+
+
+def test_http_get_still_treats_an_error_status_as_a_failure(speaker_stuck_in_setup: str) -> None:
+    """Every other caller relies on a 5xx being an error; only the opt-in reader keeps the body."""
+    with pytest.raises(C.SpeakerError, match="500"):
+        C.http_get(f"http://{speaker_stuck_in_setup}:{C.API_PORT}/now_playing", timeout=3.0)
+
+
+def test_no_answer_at_all_is_still_an_error_for_the_status_blind_reader() -> None:
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()  # nothing is left bound, so the connect is refused on every OS
+    with pytest.raises(C.SpeakerError):
+        C.http_get_any_status(f"http://127.0.0.1:{port}/now_playing", timeout=3.0)
+
+
+def test_the_status_blind_reader_refuses_a_non_http_scheme() -> None:
+    with pytest.raises(C.SpeakerError, match="non-http"):
+        C.http_get_any_status("file:///etc/passwd")
+
+
 def test_a_malformed_reply_is_no_reading_rather_than_a_traceback(
         speaker_answering_garbage: str) -> None:
     """http.client refuses a bad status line with an exception that is not an OSError."""

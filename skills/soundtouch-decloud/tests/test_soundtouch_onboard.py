@@ -130,6 +130,7 @@ def _reset_volume(box: FakeBox) -> list[TelnetReply]:
 
 def _box(monkeypatch: pytest.MonkeyPatch, box: FakeBox, *, back: bool = True) -> None:
     monkeypatch.setattr(O, "http_get", box.get)
+    monkeypatch.setattr(O, "http_get_any_status", box.get)  # the /now_playing reader
     monkeypatch.setattr(O, "_post", box.post)
     monkeypatch.setattr(O, "_key", box.key)
 
@@ -210,6 +211,106 @@ def test_now_playing_defaults_when_the_speaker_leaves_fields_out() -> None:
     reading = O.parse_now_playing("<nowPlaying></nowPlaying>")
     assert (reading.source, reading.play_status, reading.item_name) == ("", "-", "-")
     assert not reading.is_standby and not reading.is_playing
+
+
+SETUP_ERROR = ('<?xml version="1.0" encoding="UTF-8" ?><error value="1043" '
+               'name="EVENT_IN_WRONG_STATE">NowPlaying not supported in current state: Inactive</error>')
+SETUP_SOURCE = ('<nowPlaying deviceID="AABBCC0000A1" source="SETUP">'
+                '<ContentItem source="SETUP" isPresetable="true" /></nowPlaying>')
+
+
+@pytest.mark.parametrize("raw", [SETUP_ERROR, SETUP_SOURCE])
+def test_both_shapes_of_a_speaker_stuck_in_setup_are_recognised(raw: str) -> None:
+    assert O.parse_now_playing(raw).is_stuck_in_setup
+
+
+def test_standby_is_not_stuck_in_setup() -> None:
+    reading = O.parse_now_playing('<nowPlaying deviceID="AABBCC0000A1" source="STANDBY" />')
+    assert reading.is_standby and not reading.is_stuck_in_setup
+
+
+class _StuckSpeaker(BaseHTTPRequestHandler):
+    """A speaker whose state machine is stuck in setup, answering /now_playing as the firmware
+    does: status 500 WITH the document naming the fault. With `stuck_after_key` it answers like an
+    awake speaker until the first key press."""
+
+    stuck_after_key = False
+    keys: list[str] = []
+
+    def do_GET(self) -> None:
+        stuck = not type(self).stuck_after_key or bool(type(self).keys)
+        body = (SETUP_ERROR if stuck else
+                '<nowPlaying source="LOCAL_INTERNET_RADIO"><itemName>Old</itemName>'
+                "<playStatus>PLAY_STATE</playStatus></nowPlaying>").encode()
+        self.send_response(500 if stuck else 200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        type(self).keys.append(self.rfile.read(length).decode())
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def _serve_stuck(*, stuck_after_key: bool) -> Iterator[tuple[str, type[_StuckSpeaker]]]:
+    ip = "127.0.0.11"
+    handler = type("Handler", (_StuckSpeaker,), {"stuck_after_key": stuck_after_key, "keys": []})
+    try:
+        server = ThreadingHTTPServer((ip, API_PORT), handler)
+    except OSError as exc:
+        pytest.skip(f"cannot bind {ip}:{API_PORT}: {exc}")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield ip, handler
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def stuck_speaker() -> Iterator[tuple[str, type[_StuckSpeaker]]]:
+    yield from _serve_stuck(stuck_after_key=False)
+
+
+@pytest.fixture
+def speaker_stuck_by_the_press() -> Iterator[tuple[str, type[_StuckSpeaker]]]:
+    yield from _serve_stuck(stuck_after_key=True)
+
+
+def _assert_reported_stuck(rc: int, out: dict[str, object]) -> dict[str, object]:
+    data = json_object(out["data"])
+    assert data is not None
+    # 1, not 2: the speaker answered, and its answer is a definite "no".
+    assert rc == 1 and out["ok"] is False
+    assert data["stuck_in_setup"] is True
+    note = str(data["note"])
+    assert "POWER" in note and "troubleshooting.md" in note
+    return data
+
+
+def test_play_on_a_speaker_stuck_in_setup_says_so_and_presses_nothing(
+        stuck_speaker: tuple[str, type[_StuckSpeaker]], capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    ip, handler = stuck_speaker
+    monkeypatch.setattr(O.time, "sleep", _no_sleep)
+    rc = O.main(["--ip", ip, "play", "--expect", "x", "--confirm", "--wait", "5"])
+    _assert_reported_stuck(rc, json.loads(capsys.readouterr().out))
+    assert handler.keys == []
+
+
+def test_play_reports_a_speaker_that_falls_into_setup_after_the_press(
+        speaker_stuck_by_the_press: tuple[str, type[_StuckSpeaker]],
+        capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    ip, handler = speaker_stuck_by_the_press
+    monkeypatch.setattr(O.time, "sleep", _no_sleep)
+    rc = O.main(["--ip", ip, "play", "--preset", "2", "--expect", "x", "--confirm", "--wait", "5"])
+    _assert_reported_stuck(rc, json.loads(capsys.readouterr().out))
+    assert any("PRESET_2" in key for key in handler.keys)
 
 
 class _RefusingSpeaker(BaseHTTPRequestHandler):

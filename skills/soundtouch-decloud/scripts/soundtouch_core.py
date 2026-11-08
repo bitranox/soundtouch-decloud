@@ -148,7 +148,7 @@ __all__ = [
     "ORION_BASE_PATH", "ORION_STATION_PATH", "relative_orion_location", "relativize_plan",
     "registry_verdict",
     "PLAYBACK_PATH", "decode_playback_location", "slots_to_write", "missing_streams",
-    "parse_presets", "port_open", "telnet_run", "http_get",
+    "parse_presets", "port_open", "telnet_run", "http_get", "http_get_any_status",
     "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
     "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
     "http_date_header", "clock_state", "CLOCK_TOLERANCE_S",
@@ -850,6 +850,27 @@ def http_get(url: str, timeout: float = 8.0) -> str:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - scheme checked above
             return resp.read().decode("utf-8", "replace")
     except OSError as exc:
+        raise SpeakerError(f"{url}: {exc}") from exc
+
+
+def http_get_any_status(url: str, timeout: float = 8.0) -> str:
+    """GET url and return the body whatever the status, raising only when nothing came back.
+
+    A speaker stuck in setup answers /now_playing with status 500 AND the document that names the
+    fault (EVENT_IN_WRONG_STATE). http_get raises on that status, so a caller using it reads the
+    one speaker that is answering with its diagnosis as a speaker that did not answer. Only a
+    reader that parses the body for itself should use this; every other caller wants a 5xx to fail.
+    """
+    if not url.startswith(("http://", "https://")):
+        raise SpeakerError(f"refusing non-http URL: {url}")
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - scheme checked above
+            return resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.read().decode("utf-8", "replace")
+    except (OSError, http.client.HTTPException) as exc:
+        # HTTPException covers a reply http.client cannot parse, which is not an OSError.
         raise SpeakerError(f"{url}: {exc}") from exc
 
 

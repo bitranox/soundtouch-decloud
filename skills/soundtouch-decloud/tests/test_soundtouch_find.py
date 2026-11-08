@@ -66,6 +66,48 @@ def test_no_account_is_reported_before_blaming_the_sources() -> None:
     assert F.classify(_state(account="", sources={"TUNEIN": "ABSENT"})) == F.SpeakerVerdict.NEEDS_ACCOUNT
 
 
+FIRMWARE_20_SOURCES = {"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "READY"}
+
+
+def test_an_empty_account_with_radio_ready_is_not_needs_account() -> None:
+    """The firmware-20 Wireless Link Adapter leaves margeAccountUUID empty while bound; its radio
+    sources reading READY is the binding, because without an account they never mount."""
+    state = _state(account="", sources=FIRMWARE_20_SOURCES)
+    assert F.classify(state) == F.SpeakerVerdict.READY
+
+
+def test_an_inferred_account_still_runs_the_later_checks() -> None:
+    state = _state(account="", sources=FIRMWARE_20_SOURCES, preset_count=0)
+    assert F.classify(state) == F.SpeakerVerdict.NEEDS_PRESETS
+
+
+def test_an_empty_account_without_local_radio_is_still_needs_account() -> None:
+    state = _state(account="", sources={"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "ABSENT"})
+    assert F.classify(state) == F.SpeakerVerdict.NEEDS_ACCOUNT
+
+
+def test_the_json_says_when_the_account_was_inferred() -> None:
+    body = _state(account="", sources=FIRMWARE_20_SOURCES).to_json()
+    assert body["account"] == ""
+    assert body["account_inferred"] == "radio READY although /info names no account"
+
+
+def test_a_bound_speaker_carries_no_inferred_account() -> None:
+    assert "account_inferred" not in _state().to_json()
+
+
+ADAPTER_INFO = ('<?xml version="1.0" encoding="UTF-8" ?><info deviceID="00005E0053AE">'
+                "<name>Wohnzimmer</name><type>SoundTouch Wireless Link Adapter</type>"
+                "<margeAccountUUID>{account}</margeAccountUUID><components /></info>")
+
+
+@pytest.mark.parametrize("account", ["", "\n", "  \n "])
+def test_an_empty_or_blank_account_tag_reads_as_no_account(account: str) -> None:
+    info = F.parse_info(ADAPTER_INFO.format(account=account))
+    assert info.account == ""
+    assert info.device_id == "00005E0053AE"
+
+
 def test_unmounted_sources_are_their_own_verdict() -> None:
     assert F.classify(_state(sources={"TUNEIN": "READY", "LOCAL_INTERNET_RADIO": "ABSENT",
                                       "RADIO_BROWSER": "READY"})) == F.SpeakerVerdict.SOURCES_NOT_READY

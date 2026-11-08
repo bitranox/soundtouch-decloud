@@ -125,10 +125,15 @@ instead: `soundtouch_find.py` reports that as `registry-foreign`.)
 uv run scripts/soundtouch_find.py --ip <speaker-ip>
 ```
 
-A `needs-account` verdict means `/info` was read and its `margeAccountUUID` is empty. That is the
-cause, with one exception: firmware that reports the field empty while paired (the Wireless Link
-Adapter on 20.0.6, see `access-and-rooting.md`); there, check the service's own records for the
-speaker's account requests before binding anything. `unreadable` means a read of `/info`,
+A `needs-account` verdict means `/info` was read, its `margeAccountUUID` is empty, AND
+`LOCAL_INTERNET_RADIO` is not READY. Some firmware reports the field empty while paired (the
+Wireless Link Adapter on 20.0.6, see `access-and-rooting.md`), and the service then files the
+speaker under the account `default` as well (upstream issue 780), so neither says it is bound. Its
+radio does: by the rule above, a speaker without an account never mounts its radio sources. So when
+`LOCAL_INTERNET_RADIO` reads READY, `soundtouch_find.py` takes that as the binding, goes on to the
+later checks, and says so in the speaker's `account_inferred` field rather than calling it
+`needs-account`. Opening SSH on such a speaker still needs onboard's `--assume-paired`
+(access-and-rooting.md), because that check runs on `/info` alone. `unreadable` means a read of `/info`,
 `/sources` or `/presets` failed (the envelope's `*_error` field says which), so the account may be
 unknown rather than missing: give the speaker about 90 seconds after a restart and look
 again. A speaker that was registered to the Bose cloud brings its account with it; one that was

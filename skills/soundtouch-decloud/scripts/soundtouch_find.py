@@ -21,20 +21,24 @@ from enum import StrEnum
 
 try:
     from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, ClockState, ClockVerdict,
-                                 RadioSources, RegistryCheck, RegistryVerdict, ServiceUrls,
+                                 RadioSource, RadioSources, RegistryCheck, RegistryVerdict,
+                                 ServiceUrls,
                                  SpeakerError, UrlField, clock_state, http_date_header, http_get,
                                  parse_presets, parse_sources, parse_urls, port_open,
                                  json_list, json_object, registry_verdict, telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
     from soundtouch_core import (API_PORT, SSH_PORT, TELNET_PORT, ClockState, ClockVerdict,
-                                 RadioSources, RegistryCheck, RegistryVerdict, ServiceUrls,
+                                 RadioSource, RadioSources, RegistryCheck, RegistryVerdict,
+                                 ServiceUrls,
                                  SpeakerError, UrlField, clock_state, http_date_header, http_get,
                                  parse_presets, parse_sources, parse_urls, port_open,
                                  json_list, json_object, registry_verdict, telnet_run)
 
-__all__ = ["DeviceInfo", "DiscoveredDevice", "SpeakerState", "SpeakerVerdict", "build_parser",
-           "classify", "describe_state", "parse_info", "speaker_state", "main"]
+__all__ = ["DeviceInfo", "DiscoveredDevice", "SpeakerState", "SpeakerVerdict", "account_inferred",
+           "build_parser", "classify", "describe_state", "parse_info", "speaker_state", "main"]
+
+ACCOUNT_INFERRED_NOTE = "radio READY although /info names no account"
 
 # Probed in this order; the order is also the key order of the printed "ports" object.
 PROBED_PORTS = (SSH_PORT, TELNET_PORT, API_PORT)
@@ -124,8 +128,11 @@ class SpeakerState:
             return {"info_error": self.info_error}
         if self.info is None:
             return {}
-        return {"name": self.info.name, "device_id": self.info.device_id,
-                "account": self.info.account}
+        out: dict[str, object] = {"name": self.info.name, "device_id": self.info.device_id,
+                                  "account": self.info.account}
+        if account_inferred(self):
+            out["account_inferred"] = ACCOUNT_INFERRED_NOTE
+        return out
 
     def _telnet_json(self) -> dict[str, object]:
         if self.urls is not None and self.cloud_leftovers is not None:
@@ -149,6 +156,20 @@ class SpeakerState:
         return {}
 
 
+def account_inferred(state: SpeakerState) -> bool:
+    """Is the speaker bound although its /info names no account?
+
+    The Wireless Link Adapter on firmware 20 leaves margeAccountUUID empty while it is bound, and
+    the service files it under "default" (upstream issue 780), so neither of the two usual witnesses
+    can say so. Its radio can: a speaker with no account never contacts the account URL, so its
+    LOCAL_INTERNET_RADIO never mounts (references/migration.md, "If the sources never mount").
+    READY there is therefore taken as the binding, and the JSON says it was inferred.
+    """
+    return (state.info is not None and not state.info.account
+            and state.sources is not None
+            and state.sources.is_ready(RadioSource.LOCAL_INTERNET_RADIO))
+
+
 def classify(state: SpeakerState) -> SpeakerVerdict:
     """One word for what to do about this speaker next."""
     if not state.ports.get(API_PORT):
@@ -165,7 +186,7 @@ def classify(state: SpeakerState) -> SpeakerVerdict:
     if any(error is not None
            for error in (state.info_error, state.sources_error, state.presets_error)):
         return SpeakerVerdict.UNREADABLE
-    if state.info is None or not state.info.account:
+    if (state.info is None or not state.info.account) and not account_inferred(state):
         return SpeakerVerdict.NEEDS_ACCOUNT
     if state.sources is not None and not state.sources.radio_ready():
         return SpeakerVerdict.SOURCES_NOT_READY
@@ -226,7 +247,9 @@ def parse_info(raw: str) -> DeviceInfo:
     """Read name, deviceID and account out of a speaker's /info body."""
     name = raw.split("<name>", 1)[1].split("</name>", 1)[0] if "<name>" in raw else None
     device_id = raw.split('deviceID="', 1)[1].split('"', 1)[0] if 'deviceID="' in raw else None
-    account = (raw.split("<margeAccountUUID>", 1)[1].split("</", 1)[0]
+    # Stripped: an empty tag can arrive with a line break inside it, and a bare newline must not
+    # read as an account.
+    account = (raw.split("<margeAccountUUID>", 1)[1].split("</", 1)[0].strip()
                if "<margeAccountUUID>" in raw else "")
     return DeviceInfo(name=name, device_id=device_id, account=account)
 

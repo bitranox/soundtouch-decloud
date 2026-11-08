@@ -261,8 +261,10 @@ uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
 
 The envelope of the confirmed run then carries `precondition_bypassed`, so a later reader can tell
 a skipped check from a satisfied one; a dry run without `--confirm` shows `account: (empty;
-proceeding on --assume-paired)`. `soundtouch_find.py` reads the same field, so on such firmware it
-reports a paired speaker as `needs-account`: judge that verdict from the service side as well. Do NOT reach for this on a speaker that is genuinely unpaired: there the
+proceeding on --assume-paired)`. `soundtouch_find.py` reads the same field but also the radio
+sources: once `LOCAL_INTERNET_RADIO` reads READY it treats the speaker as bound and marks it with
+`account_inferred` (see migration.md), so `needs-account` from find on such firmware means the radio
+has not mounted either. Do NOT reach for this on a speaker that is genuinely unpaired: there the
 precondition is right, the injection has no read cycle to fire on, and the run does nothing at all
 while appearing to succeed.
 
